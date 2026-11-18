@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.rs   text diff=rust
+*.toml text
+*.md   text
+*.png  binary
+*.db   binary
+*.sqlite binary

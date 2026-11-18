@@ -1,0 +1,224 @@
+name: Build & Release Tesie
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  frontend:
+    name: Build Dashboard SPA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Typecheck & build frontend
+        working-directory: frontend
+        run: |
+          bun install
+          bunx tsc --noEmit
+          bun run build
+
+      - name: Upload built dashboard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesie-www
+          path: frontend/dist
+          if-no-files-found: error
+
+  test:
+    name: Backend & TesieCore Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: mihomo/go.sum
+
+      - name: Test & build TesieCore
+        working-directory: mihomo
+        run: |
+          go test ./hub/route -run TestTesRoute
+          mkdir -p ../.data/bin
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../.data/bin/tesie-core .
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo workspace
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Run Rust workspace tests
+        working-directory: backend
+        env:
+          TESIE_CORE_BIN: ${{ github.workspace }}/.data/bin/tesie-core
+        run: cargo test --workspace --no-fail-fast
+
+  build:
+    name: Build (${{ matrix.label }})
+    needs: [frontend]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon (arm64)
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            goos: darwin
+            goarch: arm64
+            bin_ext: ""
+            archive: tesie-macos-arm64.tar.gz
+          - label: macOS Intel (x64)
+            os: macos-14
+            rust_target: x86_64-apple-darwin
+            goos: darwin
+            goarch: amd64
+            bin_ext: ""
+            archive: tesie-macos-x64.tar.gz
+          - label: Linux x64
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            goos: linux
+            goarch: amd64
+            bin_ext: ""
+            archive: tesie-linux-x64.tar.gz
+          - label: Linux ARM64
+            os: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-gnu
+            goos: linux
+            goarch: arm64
+            bin_ext: ""
+            archive: tesie-linux-arm64.tar.gz
+          - label: Windows x64
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            goos: windows
+            goarch: amd64
+            bin_ext: ".exe"
+            archive: tesie-windows-x64.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux ARM64 cross-compiler
+        if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: mihomo/go.sum
+
+      - name: Build TesieCore (${{ matrix.goos }}/${{ matrix.goarch }})
+        working-directory: mihomo
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p ../stage/bin
+          go build -trimpath -ldflags="-s -w" -o "../stage/bin/tesie-core${{ matrix.bin_ext }}" .
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Cargo workspace
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: ${{ matrix.rust_target }}
+
+      - name: Build Tesie & TesieDaemon (${{ matrix.rust_target }})
+        working-directory: backend
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --bins --target "${{ matrix.rust_target }}"
+          cp "target/${{ matrix.rust_target }}/release/tesie${{ matrix.bin_ext }}" "../stage/bin/"
+          cp "target/${{ matrix.rust_target }}/release/tesie-daemon${{ matrix.bin_ext }}" "../stage/bin/"
+
+      - name: Download built dashboard SPA
+        uses: actions/download-artifact@v4
+        with:
+          name: tesie-www
+          path: stage/www
+
+      - name: Package Unix tarball
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cp README.md stage/README.md
+          chmod +x stage/bin/*
+          mkdir -p dist
+          tar -C stage -czf "dist/${{ matrix.archive }}" .
+
+      - name: Package Windows zip
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Copy-Item README.md stage\README.md
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path stage\* -DestinationPath "dist\${{ matrix.archive }}" -Force
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.archive }}
+          path: dist/${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: release-assets
+        run: |
+          sha256sum tesie-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/tesie-*
+            release-assets/SHA256SUMS.txt

@@ -1,0 +1,17 @@
+[package]
+name = "tesie-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tesie-core.workspace = true
+tesie-providers.workspace = true
+tesie-proxy.workspace = true
+tesie-store.workspace = true
+tracing.workspace = true
+uuid.workspace = true

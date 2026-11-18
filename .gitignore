@@ -1,0 +1,42 @@
+# Build artifacts
+/target/
+/backend/target/
+*.exe
+*.pdb
+mihomo/tesie-core*
+mihomo/mihomo*
+mihomo/bin/
+
+# Frontend
+web/
+frontend/node_modules/
+frontend/dist/
+
+# Local data dir & databases
+.data/
+.9router/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+
+# Secrets
+.env
+.env.*
+*.secret
+clients-secret*
+
+# Logs
+*.log
+*.log.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local agent harness config (not project content)
+.omo/
+.claude/
+.agents/

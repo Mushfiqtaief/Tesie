@@ -1,0 +1,46 @@
+[package]
+name = "tesie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "tesie"
+
+[[bin]]
+name = "tesie"
+path = "src/main.rs"
+
+[[bin]]
+name = "tesie-daemon"
+path = "src/bin/tesie_daemon.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+hex.workspace = true
+rand.workspace = true
+serde_json.workspace = true
+tesie-admin.workspace = true
+tesie-core.workspace = true
+tesie-gateway.workspace = true
+tesie-providers.workspace = true
+tesie-proxy.workspace = true
+tesie-store.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+reqwest.workspace = true
+tokio-stream.workspace = true

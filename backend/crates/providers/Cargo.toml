@@ -1,0 +1,27 @@
+[package]
+name = "tesie-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+hex.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tesie-core.workspace = true
+tesie-proxy.workspace = true
+tesie-store.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
