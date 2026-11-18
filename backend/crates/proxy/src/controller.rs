@@ -192,7 +192,7 @@ impl MihomoController {
         });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let mut last_err = String::new();
+        let mut last_err: Option<String> = None;
         loop {
             if let Some(status) = controller.try_wait_child()? {
                 return Err(TesRouteError::ProxyRelay(format!(
@@ -209,12 +209,13 @@ impl MihomoController {
                     return Ok(controller);
                 }
                 Err(e) => {
-                    last_err = e.to_string();
+                    last_err = Some(e.to_string());
                 }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(TesRouteError::ProxyRelay(format!(
-                    "timed out waiting for TesieCore /tesie/health ({last_err})"
+                    "timed out waiting for TesieCore /tesie/health ({})",
+                    last_err.as_deref().unwrap_or("no response")
                 )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

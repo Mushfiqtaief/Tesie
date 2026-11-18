@@ -120,10 +120,7 @@ impl Cli {
         self.serve
             || matches!(self.command, Some(TesieCommand::Serve))
             || (self.command.is_none()
-                && (self.core_bin.is_some()
-                    || self.frontend_dir.is_some()
-                    || self.import_proxies_only.is_some()
-                    || self.list_socks4))
+                && (self.import_proxies_only.is_some() || self.list_socks4))
     }
 }
 
@@ -697,15 +694,16 @@ mod tests {
         let serve_sub = Cli::try_parse_from(["tesie", "serve"]).expect("parse subcommand serve");
         assert!(serve_sub.should_run_server());
 
-        let core_flag = Cli::try_parse_from([
+        let serve_flag2 = Cli::try_parse_from([
             "tesie",
+            "--serve",
             "--port",
             "20129",
             "--core-bin",
             "tesie-core.exe",
         ])
         .expect("parse server args");
-        assert!(core_flag.should_run_server());
+        assert!(serve_flag2.should_run_server());
     }
 
     #[test]
