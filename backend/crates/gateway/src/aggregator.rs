@@ -421,6 +421,25 @@ pub fn sse_error_payload(err: &TesRouteError) -> (axum::http::StatusCode, Option
             None,
             json!({ "error": { "message": msg, "type": "invalid_request_error" } }),
         ),
+        TesRouteError::ContextLengthExceeded(msg) => {
+            let clean_msg = if msg.trim().is_empty() {
+                "This model's maximum context length was exceeded. Please compact or shorten the prompt."
+            } else {
+                msg.as_str()
+            };
+            (
+                StatusCode::BAD_REQUEST,
+                None,
+                json!({
+                    "error": {
+                        "message": clean_msg,
+                        "type": "invalid_request_error",
+                        "param": "messages",
+                        "code": "context_length_exceeded"
+                    }
+                }),
+            )
+        }
         TesRouteError::Unauthorized(msg) => (
             StatusCode::UNAUTHORIZED,
             None,
@@ -480,6 +499,21 @@ pub fn sse_error_payload(err: &TesRouteError) -> (axum::http::StatusCode, Option
             json!({ "error": { "message": format!("no credentials configured for {msg}"), "type": "service_unavailable" } }),
         ),
         TesRouteError::Upstream { status, message } => {
+            if tesie_core::is_context_length_error(*status, message) {
+                let clean_msg = tesie_core::extract_clean_context_message(message);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    None,
+                    json!({
+                        "error": {
+                            "message": clean_msg,
+                            "type": "invalid_request_error",
+                            "param": "messages",
+                            "code": "context_length_exceeded"
+                        }
+                    }),
+                );
+            }
             let lower = message.to_ascii_lowercase();
             let is_quota_leak = lower.contains("freeusagelimiterror")
                 || lower.contains("freetiererror")

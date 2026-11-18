@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowRightLeft,
   Check,
   Copy,
   Database,
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -38,6 +40,7 @@ export function SettingsView({
   const [loading, setLoading] = useState(true);
   const [copiedPath, setCopiedPath] = useState(false);
   const [togglingAutostart, setTogglingAutostart] = useState(false);
+  const [togglingFailover, setTogglingFailover] = useState(false);
 
   // Proxy health interval
   const [healthIntervalInput, setHealthIntervalInput] = useState("15");
@@ -112,6 +115,25 @@ export function SettingsView({
       onNotify(err instanceof Error ? err.message : "Failed to toggle Windows Startup", true);
     } finally {
       setTogglingAutostart(false);
+    }
+  }
+
+  async function handleToggleFailover(exhaustive: boolean) {
+    if (!data) return;
+    setTogglingFailover(true);
+    try {
+      const res = await api.updateFullSettings({ exhaustive_failover: exhaustive });
+      setData(res);
+      onNotify(
+        exhaustive
+          ? "Enabled exhaustive pool failover (tries all available accounts & proxies before failing)"
+          : "Enabled direct error mode (returns upstream error to client on first failure)",
+      );
+      await onReloadAll();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to update failover policy", true);
+    } finally {
+      setTogglingFailover(false);
     }
   }
 
@@ -461,6 +483,67 @@ export function SettingsView({
                 </Button>
               </div>
             </form>
+          </div>
+        </Card>
+
+        {/* Card: Routing & Failover Policy */}
+        <Card
+          title="Failover & Error Dispatch Policy"
+          subtitle="Configure whether Tesie load balances and retries across all accounts/proxies or returns errors immediately"
+          actions={
+            <StatusPill tone={data?.settings.exhaustive_failover ? "success" : "warning"} dot>
+              {data?.settings.exhaustive_failover ? "Try to the last (Active)" : "Direct Error Mode"}
+            </StatusPill>
+          }
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
+              <div className="min-w-0 max-w-md">
+                <div className="text-sm font-medium text-[var(--text-primary)]">
+                  Quota & Rate-Limit Failover Mode
+                </div>
+                <div className="text-xs text-[var(--text-muted)] mt-1">
+                  {data?.settings.exhaustive_failover
+                    ? "Tesie automatically load balances and retries across every ready proxy IP (OpenCode) and operational account (Antigravity). Downstream client only receives a failure if every available unit is exhausted."
+                    : "Returns the upstream rate limit or quota error immediately on the very first failed attempt without retrying remaining proxies or accounts."}
+                </div>
+              </div>
+
+              <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1">
+                <button
+                  type="button"
+                  disabled={togglingFailover}
+                  onClick={() => void handleToggleFailover(true)}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                    data?.settings.exhaustive_failover
+                      ? "bg-[var(--accent)] text-white shadow-xs"
+                      : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  Try to the last
+                </button>
+                <button
+                  type="button"
+                  disabled={togglingFailover}
+                  onClick={() => void handleToggleFailover(false)}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                    !data?.settings.exhaustive_failover
+                      ? "bg-[var(--warning)] text-black font-semibold shadow-xs"
+                      : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  Show error immediately
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3.5 flex items-start gap-2.5">
+              <Sparkles className="h-4 w-4 text-[var(--accent)] shrink-0 mt-0.5" />
+              <div className="text-xs leading-relaxed text-[var(--text-secondary)]">
+                <strong className="text-[var(--text-primary)] font-medium">Automatic Context-Window Compacting:</strong> Deterministic context length errors (<code className="font-mono text-[11px]">context_length_exceeded</code> / prompt too long) always fast-fail directly with clean HTTP 400 JSON so AI coding CLIs (OpenCode, Claude Code, Aider) can trigger their automatic compact workflow without burning unnecessary proxy retries.
+              </div>
+            </div>
           </div>
         </Card>
 

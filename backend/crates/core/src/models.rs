@@ -398,6 +398,7 @@ pub struct GatewaySettings {
     pub default_free_ip_max_tokens: Option<i64>,
     pub session_ttl_ms: i64,
     pub proxy_test_interval_sec: u64,
+    pub exhaustive_failover: bool,
 }
 
 impl Default for GatewaySettings {
@@ -409,6 +410,7 @@ impl Default for GatewaySettings {
             default_free_ip_max_tokens: None,
             session_ttl_ms: 14_400_000,
             proxy_test_interval_sec: 15,
+            exhaustive_failover: true,
         }
     }
 }

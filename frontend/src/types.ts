@@ -699,6 +699,7 @@ export interface GatewaySettings {
   default_free_ip_max_tokens: number | null;
   session_ttl_ms: number;
   proxy_test_interval_sec: number;
+  exhaustive_failover: boolean;
 }
 
 export interface SettingsSystemInfo {

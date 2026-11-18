@@ -418,8 +418,16 @@ impl CustomProviderEngine {
             *self.last_error.lock().unwrap() = Some((cp.id.clone(), now_ms()));
             last_error = Some(format!("HTTP {status}: {}", err_txt.chars().take(400).collect::<String>()));
 
+            if tesie_core::is_context_length_error(status, &err_txt) {
+                return Err(TesRouteError::ContextLengthExceeded(
+                    tesie_core::extract_clean_context_message(&err_txt),
+                ));
+            }
+
             if matches!(status, 400 | 422) {
-                return Err(TesRouteError::BadRequest(last_error.unwrap_or_default()));
+                return Err(TesRouteError::BadRequest(
+                    tesie_core::extract_clean_context_message(&err_txt),
+                ));
             }
         }
 

@@ -2406,6 +2406,7 @@ struct UpdateSettingsBody {
     pub default_free_ip_max_tokens: Option<Option<i64>>,
     pub session_ttl_ms: Option<i64>,
     pub proxy_test_interval_sec: Option<u64>,
+    pub exhaustive_failover: Option<bool>,
     #[serde(default, deserialize_with = "tesie_store::deserialize_double_option")]
     pub admin_password: Option<Option<String>>,
     #[serde(default)]
@@ -2423,6 +2424,7 @@ async fn update_settings(
         default_free_ip_max_tokens: body.default_free_ip_max_tokens,
         session_ttl_ms: body.session_ttl_ms,
         proxy_test_interval_sec: body.proxy_test_interval_sec,
+        exhaustive_failover: body.exhaustive_failover,
     };
     state
         .store

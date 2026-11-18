@@ -795,6 +795,15 @@ impl AntigravityEngine {
 
         self.apply_account_routing_strategy(&mut eligible_accounts, &ag_cfg.routing_strategy);
 
+        let gateway_settings = self.store.settings().get_settings().await.unwrap_or_default();
+        let exhaustive_failover = gateway_settings.exhaustive_failover;
+
+        let eligible_accounts_iter: Vec<ProviderConnection> = if exhaustive_failover {
+            eligible_accounts.clone()
+        } else {
+            eligible_accounts.iter().take(1).cloned().collect()
+        };
+
         let mut trace_legs: Vec<AttemptTraceLeg> = Vec::new();
         let mut last_err_msg: Option<String> = None;
         let mut saw_quota_exhausted = false;
@@ -802,7 +811,7 @@ impl AntigravityEngine {
 
         // Walk eligible Antigravity accounts in configured routing_strategy order (`fallback` | `round-robin` | `random`).
         // Notice `part_map` is keyed by `account.id` so every account always stays pinned to its disjoint proxy slice!
-        for account in &eligible_accounts {
+        for account in &eligible_accounts_iter {
             let Some(part) = part_map.get(&account.id) else {
                 continue;
             };
@@ -1166,12 +1175,18 @@ impl AntigravityEngine {
                         continue;
                     }
 
+                    // Context length / token limit exceeded: fast-fail direct to client without retrying other accounts
+                    if tesie_core::is_context_length_error(status, &err_body) {
+                        return Err(TesRouteError::ContextLengthExceeded(
+                            tesie_core::extract_clean_context_message(&err_body),
+                        ));
+                    }
+
                     // Deterministic client 400 / 422 invalid-request error: do NOT burn cooldown or retry other accounts
                     if matches!(status, 400 | 422) {
-                        return Err(TesRouteError::BadRequest(format!(
-                            "Antigravity upstream returned HTTP {status}: {}",
-                            err_body.chars().take(400).collect::<String>()
-                        )));
+                        return Err(TesRouteError::BadRequest(
+                            tesie_core::extract_clean_context_message(&err_body),
+                        ));
                     }
 
                     // Classify outcome into Banned vs Unlicensed vs Quota Exhausted vs Escalating Model Failure Cooldown

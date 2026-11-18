@@ -9,7 +9,7 @@ pub use catalog::{
     model_level_capabilities, parse_model_spec, target_format, CatalogModel, ParsedModel,
     THINKING_LEVEL_NAMES,
 };
-pub use error::{Result, TesRouteError};
+pub use error::{extract_clean_context_message, is_context_length_error, Result, TesRouteError};
 pub use models::{
     default_routing_strategy_for, normalize_routing_strategy, AntigravityModelQuotaEntry,
     AntigravityPoolWindow, AntigravityQuotaSnapshot, ApiKeyRecord, ComboRecord, CustomProvider,

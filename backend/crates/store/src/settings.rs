@@ -21,6 +21,7 @@ pub struct UpdateSettingsInput {
     pub default_free_ip_max_tokens: Option<Option<i64>>,
     pub session_ttl_ms: Option<i64>,
     pub proxy_test_interval_sec: Option<u64>,
+    pub exhaustive_failover: Option<bool>,
 }
 
 impl SettingsRepo {
@@ -79,6 +80,10 @@ impl SettingsRepo {
         {
             out.proxy_test_interval_sec = n.clamp(5, 3600);
         }
+        if let Some(v) = map.get("exhaustive_failover") {
+            out.exhaustive_failover =
+                matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1");
+        }
 
         Ok(out)
     }
@@ -119,6 +124,10 @@ impl SettingsRepo {
         if let Some(interval_sec) = input.proxy_test_interval_sec {
             let clamped = interval_sec.clamp(5, 3600);
             self.set_raw("proxy_test_interval_sec", &clamped.to_string(), now)
+                .await?;
+        }
+        if let Some(failover) = input.exhaustive_failover {
+            self.set_raw("exhaustive_failover", if failover { "true" } else { "false" }, now)
                 .await?;
         }
 

@@ -1055,6 +1055,9 @@ impl OpenCodeEngine {
             .await?;
 
         let model_label = display_name_for_model(provider, &parsed.model_id);
+        let gateway_settings = self.store.settings().get_settings().await.unwrap_or_default();
+        let exhaustive_failover = gateway_settings.exhaustive_failover;
+
         if candidates.is_empty() {
             if is_title_call {
                 return Ok(synthesize_title_stream(
@@ -1373,6 +1376,19 @@ impl OpenCodeEngine {
                                 .await;
                             self.mark_error_provider(provider.id());
                             last_error = Some(raw_detail);
+                            if is_quota && !exhaustive_failover {
+                                return Err(TesRouteError::ModelQuotaExhausted(format!(
+                                    "No quota available for {model_label}."
+                                )));
+                            }
+                            if is_quota && attempt_legs.len() >= 10 {
+                                warn!(
+                                    attempts = attempt_legs.len(),
+                                    model = %parsed.model_id,
+                                    "reached maximum failover attempts for OpenCode request"
+                                );
+                                break;
+                            }
                             break;
                         }
                         SsePreCommit::TransportError(msg) => {
@@ -1558,7 +1574,31 @@ impl OpenCodeEngine {
                     self.mark_error_provider(provider.id());
 
                     last_error = Some(format!("[{status}] {err_body}"));
+                    if !exhaustive_failover {
+                        return Err(TesRouteError::ModelQuotaExhausted(format!(
+                            "No quota available for {model_label}."
+                        )));
+                    }
+                    if attempt_legs.len() >= 10 {
+                        warn!(
+                            attempts = attempt_legs.len(),
+                            model = %parsed.model_id,
+                            "reached maximum failover attempts for OpenCode request"
+                        );
+                        break;
+                    }
                     break;
+                }
+
+                if tesie_core::is_context_length_error(status, &err_body) {
+                    info!(
+                        model = %parsed.model_id,
+                        proxy = %candidate.proxy.name,
+                        "context length exceeded; fast-failing direct to client without proxy cooldown"
+                    );
+                    return Err(TesRouteError::ContextLengthExceeded(
+                        tesie_core::extract_clean_context_message(&err_body),
+                    ));
                 }
 
                 // Request-scoped deterministic error (400/404/422/5xx) — do NOT cool down exit IP

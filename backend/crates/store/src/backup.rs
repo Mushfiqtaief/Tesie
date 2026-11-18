@@ -165,6 +165,7 @@ impl BackupRepo {
                     default_free_ip_max_tokens: Some(s.default_free_ip_max_tokens),
                     session_ttl_ms: Some(s.session_ttl_ms),
                     proxy_test_interval_sec: Some(s.proxy_test_interval_sec),
+                    exhaustive_failover: Some(s.exhaustive_failover),
                 })
                 .await?;
             summary.settings_updated = true;
