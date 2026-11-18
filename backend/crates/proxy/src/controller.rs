@@ -128,6 +128,25 @@ impl MihomoController {
         std::fs::write(&config_path, yaml)
             .map_err(|e| TesRouteError::ProxyRelay(format!("write mihomo config.yaml: {e}")))?;
 
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            // Clean up any stale orphaned TesieCore processes before binding
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", "tesie-core.exe"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("pkill")
+                .args(["-9", "-x", "tesie-core"])
+                .output();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
         let mut cmd = tokio::process::Command::new(&cfg.bin_path);
         cmd.arg("-d")
             .arg(&abs_work_dir)
@@ -173,24 +192,30 @@ impl MihomoController {
         });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut last_err = String::new();
         loop {
             if let Some(status) = controller.try_wait_child()? {
                 return Err(TesRouteError::ProxyRelay(format!(
                     "TesieCore exited prematurely with status {status}"
                 )));
             }
-            if let Ok(h) = controller.health().await {
-                info!(
-                    ja4 = %h.ja4_cipher_hash,
-                    proxies = h.proxies_loaded,
-                    "TesieCore controller ready"
-                );
-                return Ok(controller);
+            match controller.health().await {
+                Ok(h) => {
+                    info!(
+                        ja4 = %h.ja4_cipher_hash,
+                        proxies = h.proxies_loaded,
+                        "TesieCore controller ready"
+                    );
+                    return Ok(controller);
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(TesRouteError::ProxyRelay(
-                    "timed out waiting for TesieCore /tesie/health".into(),
-                ));
+                return Err(TesRouteError::ProxyRelay(format!(
+                    "timed out waiting for TesieCore /tesie/health ({last_err})"
+                )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
