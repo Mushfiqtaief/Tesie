@@ -119,9 +119,12 @@ func (ss *Socks4) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Co
 		return nil, fmt.Errorf("%s connect error: %w", ss.addr, err)
 	}
 
+	defer func(c net.Conn) {
+		safeConnClose(c, err)
+	}(c)
+
 	c, err = ss.StreamConnContext(ctx, c, metadata)
 	if err != nil {
-		_ = c.Close()
 		// If SOCKS4a remote-dns was rejected by a strict SOCKS4 server, transparently retry once with resolved IPv4
 		if ss.remoteDNS && !metadata.DstIP.IsValid() && metadata.Host != "" && errors.Is(err, socks4.ErrRequestRejected) {
 			c2, dialErr := ss.dialer.DialContext(ctx, "tcp", ss.addr)
