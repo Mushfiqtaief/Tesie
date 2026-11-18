@@ -88,6 +88,43 @@ export function maskProxyUrl(url: string | null | undefined): string {
 }
 
 /**
+ * Serializes a stored proxy node back into a shareable `scheme://[user:pass@]host:port`
+ * URL, falling back to host/port when only structured fields are stored. The output
+ * round-trips through the batch import endpoint.
+ */
+export function proxyExportUrl(proxy: {
+  is_direct: boolean;
+  proxy_url?: string | null;
+  proxy_type: string;
+  host?: string | null;
+  port?: number | null;
+  username?: string | null;
+  password?: string | null;
+}): string | null {
+  if (proxy.is_direct) return null;
+  const stored = proxy.proxy_url?.trim();
+  if (stored) return stored;
+
+  const host = proxy.host?.trim();
+  if (!host || !proxy.port) return null;
+  const rawType = proxy.proxy_type.trim().toLowerCase();
+  const scheme =
+    rawType === "socks4" || rawType === "socks4a"
+      ? "socks4"
+      : rawType.startsWith("socks") || rawType === "ss"
+        ? rawType
+        : rawType === "https"
+          ? "https"
+          : "http";
+  const auth = proxy.username
+    ? `${encodeURIComponent(proxy.username)}${
+        proxy.password ? `:${encodeURIComponent(proxy.password)}` : ""
+      }@`
+    : "";
+  return `${scheme}://${auth}${host.includes(":") ? `[${host}]` : host}:${proxy.port}`;
+}
+
+/**
  * Converts verbose upstream error JSON/strings into a concise, human-readable
  * cooldown summary so quota rows/cards stay crisp instead of dumping raw JSON.
  */

@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
+  Check,
+  Copy,
+  Download,
   LayoutGrid,
   List,
   Loader2,
@@ -21,6 +24,7 @@ import {
   EmptyState,
   INPUT_CLASS,
   MeterBar,
+  Modal,
   SlideOverDrawer,
   StatusPill,
 } from "../components/UiPrimitives";
@@ -30,6 +34,7 @@ import type {
   IpQuotaWithProxies,
   ProviderCatalogItem,
   ProviderQuotaSummary,
+  ProxyWithQuota,
   QuotaProbeStatus,
   UpdateIpQuotaLimitsPayload,
   UpdateProviderConfigPayload,
@@ -40,6 +45,7 @@ import {
   formatCountdown,
   formatTimeAgo,
   getProviderLogo,
+  proxyExportUrl,
   proxyModeLabel,
   routingStrategyLabel,
 } from "../utils/format";
@@ -47,6 +53,7 @@ import {
 type IpPoolFilter = "all" | "active" | "cooling";
 type AgAccountFilter = "all" | "cooling" | "ready" | "disabled";
 type QuotaViewMode = "table" | "list";
+type ExportScope = "ready" | "working" | "all";
 
 const VIEW_MODE_STORAGE_KEY = "tesie_quota_view_mode";
 const LEGACY_VIEW_MODE_STORAGE_KEY = "tesroute_quota_view_mode";
@@ -159,12 +166,14 @@ export function QuotaTrackerView({
   providers = [],
   providerQuotas,
   ipQuotas,
+  proxies = [],
   antigravityAccounts,
   initialProviderId,
   lastQuotaSyncAt,
   quotaProbeStatus,
   probingQuotas,
   loading,
+  onNotify,
   onOpenProviderSettings,
   nowMs,
   onRefreshQuotas,
@@ -180,12 +189,14 @@ export function QuotaTrackerView({
   providers?: ProviderCatalogItem[];
   providerQuotas: ProviderQuotaSummary[];
   ipQuotas: IpQuotaWithProxies[];
+  proxies?: ProxyWithQuota[];
   antigravityAccounts?: AntigravityAccountView[];
   initialProviderId?: string;
   lastQuotaSyncAt: number;
   quotaProbeStatus?: QuotaProbeStatus | null;
   probingQuotas?: boolean;
   loading: boolean;
+  onNotify?: (message: string, isError?: boolean) => void;
   onOpenProviderSettings: (providerId: string) => void;
   nowMs: number;
   onRefreshQuotas: () => Promise<void>;
@@ -218,6 +229,12 @@ export function QuotaTrackerView({
   const [refreshingAgAll, setRefreshingAgAll] = useState(false);
   const [refreshingAgOne, setRefreshingAgOne] = useState<string | null>(null);
   const [togglingAgId, setTogglingAgId] = useState<string | null>(null);
+
+  // Proxy export drawer
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportScope, setExportScope] = useState<ExportScope>("ready");
+  const [exportCopied, setExportCopied] = useState(false);
+  const exportTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // SlideOver limit editor for IP quota buckets
   const [editingIp, setEditingIp] = useState<IpQuotaWithProxies | null>(null);
@@ -368,6 +385,47 @@ export function QuotaTrackerView({
     }
   }
 
+  async function handleCopyExport() {
+    const text = exportLines.join("\n");
+    const flashCopied = () => {
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 1800);
+    };
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopied();
+      onNotify?.(`Copied ${exportLines.length} proxy URLs`);
+      return;
+    } catch {
+      // Clipboard API can be blocked (insecure origin, denied permission) — fall through.
+    }
+    const ta = exportTextareaRef.current;
+    if (ta) {
+      ta.focus();
+      ta.select();
+      if (document.execCommand("copy")) {
+        flashCopied();
+        onNotify?.(`Copied ${exportLines.length} proxy URLs`);
+        return;
+      }
+    }
+    onNotify?.("Clipboard blocked — text is selected, press ⌘/Ctrl+C", true);
+  }
+
+  function handleDownloadExport() {
+    const blob = new Blob([`${exportLines.join("\n")}\n`], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tesie-proxies-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    onNotify?.(`Exported ${exportLines.length} proxy URLs`);
+  }
+
   function openLimitsDrawer(q: IpQuotaWithProxies) {
     setEditingIp(q);
     setWindowMinutes(String(Math.max(1, Math.round(q.window_duration_ms / 60_000))));
@@ -393,6 +451,32 @@ export function QuotaTrackerView({
   }
 
   const qLower = search.trim().toLowerCase();
+
+  const exportableProxies = proxies.filter((p) => !p.is_direct && !!proxyExportUrl(p));
+  const unexportableCount = proxies.filter((p) => !p.is_direct).length - exportableProxies.length;
+  const healthyProxies = exportableProxies.filter((p) => p.enabled && p.alive);
+
+  // Proxies whose exit IP is tagged cooldown by OpenCode Free quota tracking.
+  const coolingIpKeys = new Set(
+    ipQuotas.filter((q) => q.status === "cooldown").map((q) => q.ip_key),
+  );
+  const readyProxies = exportableProxies.filter(
+    (p) => !coolingIpKeys.has(p.ip_key) && p.enabled && p.alive,
+  );
+
+  const exportScopes = {
+    ready: { proxies: readyProxies, label: `Ready only (${readyProxies.length})` },
+    working: { proxies: healthyProxies, label: `Working only (${healthyProxies.length})` },
+    all: { proxies: exportableProxies, label: `Everything (${exportableProxies.length})` },
+  } as const;
+
+  const exportLines = Array.from(
+    new Set(
+      exportScopes[exportScope]
+        .proxies.map(proxyExportUrl)
+        .filter((line): line is string => !!line),
+    ),
+  );
 
   // Cooling stays true as long as `q.status === "cooldown"` (only cleared when real OpenCode usage is verified!)
   const realCoolingCount = ipQuotas.filter((q) => q.status === "cooldown").length;
@@ -581,6 +665,20 @@ export function QuotaTrackerView({
                 nowMs={nowMs}
               />
             )}
+
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={exportableProxies.length === 0}
+              onClick={() => {
+                setExportCopied(false);
+                setExportOpen(true);
+              }}
+              title="Export proxy URLs for use in any other client"
+            >
+              <Download className="h-4 w-4" />
+              Export
+            </Button>
 
             {isAntigravity ? (
               <Button
@@ -1374,6 +1472,77 @@ export function QuotaTrackerView({
           </form>
         )}
       </SlideOverDrawer>
+
+      {/* Export working proxies as portable URLs */}
+      <Modal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        title="Export proxies"
+        subtitle="One URL per line — paste into any SOCKS/HTTP client, or back into the proxy import box"
+        maxWidth="max-w-2xl"
+      >
+        <div className="space-y-4">
+          <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
+            {(Object.keys(exportScopes) as ExportScope[]).map((scope) => (
+              <button
+                key={scope}
+                type="button"
+                onClick={() => setExportScope(scope)}
+                className={`rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors ${
+                  exportScope === scope
+                    ? "bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {exportScopes[scope].label}
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            ref={exportTextareaRef}
+            readOnly
+            rows={12}
+            value={exportLines.join("\n")}
+            placeholder="No proxies available to export"
+            onFocus={(e) => e.currentTarget.select()}
+            className={`${INPUT_CLASS} font-mono text-xs`}
+          />
+
+          <p className="text-[11px] text-[var(--text-muted)]">
+            <span className="font-medium text-[var(--text-secondary)]">Ready</span> = alive,
+            enabled, and not in an OpenCode Free cooldown. Includes credentials exactly as
+            stored. Direct routes are skipped
+            {unexportableCount > 0
+              ? `, along with ${unexportableCount} raw-JSON ${
+                  unexportableCount === 1 ? "node" : "nodes"
+                } that has no shareable URL`
+              : ""}
+            ; duplicates are collapsed.
+          </p>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="md"
+              disabled={exportLines.length === 0}
+              onClick={() => void handleCopyExport()}
+            >
+              {exportCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {exportCopied ? "Copied" : "Copy all"}
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
+              disabled={exportLines.length === 0}
+              onClick={handleDownloadExport}
+            >
+              <Download className="h-4 w-4" />
+              Download .txt
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

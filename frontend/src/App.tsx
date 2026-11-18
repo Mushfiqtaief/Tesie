@@ -1317,12 +1317,14 @@ export function App() {
                 providers={providersCatalog}
                 providerQuotas={providerQuotas}
                 ipQuotas={ipQuotas}
+                proxies={proxies}
                 antigravityAccounts={antigravityAccounts}
                 initialProviderId={selectedQuotaProviderId}
                 lastQuotaSyncAt={lastQuotaSyncAt}
                 quotaProbeStatus={quotaProbeStatus}
                 probingQuotas={probingQuotas}
                 loading={loading}
+                onNotify={notify}
                 onOpenProviderSettings={(pid) => {
                   setSelectedProviderId(pid);
                   navigate("/providers", { provider: pid });
