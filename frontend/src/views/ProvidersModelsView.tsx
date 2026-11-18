@@ -5,7 +5,10 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
+  AlertCircle,
   Copy,
   ExternalLink,
   Gauge,
@@ -246,6 +249,16 @@ export function ProvidersModelsView({
   const [testingProvider, setTestingProvider] = useState(false);
   const [syncingQuotas, setSyncingQuotas] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({});
+  const [expandedAccountIds, setExpandedAccountIds] = useState<Set<string>>(new Set());
+
+  function toggleAccountExpanded(id: string) {
+    setExpandedAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Provider config form state
   const [proxySelection, setProxySelection] = useState<ProxySelectionValue>({
@@ -1563,200 +1576,285 @@ export function ProvidersModelsView({
                     (p.key.includes("weekly") || p.window_label.toLowerCase().includes("week")),
                 );
 
-                const cardSurface = isBanned
-                  ? "border-[color-mix(in_srgb,var(--danger)_34%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--danger-soft)_20%,var(--bg-surface))]"
-                  : cooling
-                    ? "border-[color-mix(in_srgb,var(--warning)_38%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--warning-soft)_22%,var(--bg-surface))]"
-                    : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]";
+                const isExpanded = expandedAccountIds.has(acct.id);
+
+                // Sort models: priority to cooling/failed models, then flagship models, then lite
+                const sortedModels = [...availableModels].sort((a, b) => {
+                  const aCool = (cooldownMap.get(a.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
+                  const bCool = (cooldownMap.get(b.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
+                  if (aCool !== bCool) return bCool - aCool;
+                  const aFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(a.model) ? 1 : 0;
+                  const bFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(b.model) ? 1 : 0;
+                  if (aFlag !== bFlag) return bFlag - aFlag;
+                  return 0;
+                });
+
+                const visibleModels = isExpanded
+                  ? sortedModels
+                  : sortedModels.filter((m, i) => i < 4 || (cooldownMap.get(m.model)?.cooldown_until ?? 0) > nowMs);
+                const hasHiddenModels = !isExpanded && sortedModels.length > visibleModels.length;
+
+                const cardSurface = "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]";
 
                 return (
                   <article
                     key={acct.id}
-                    className={`flex flex-col justify-between gap-3 rounded-2xl border p-4 sm:p-5 transition-[border-color,background-color] duration-150 ${cardSurface} ${
-                      !acct.enabled ? "opacity-80" : ""
+                    className={`group relative overflow-hidden flex flex-col justify-between gap-3.5 rounded-2xl border p-4 sm:p-5 transition-colors duration-150 ${cardSurface} ${
+                      !acct.enabled ? "opacity-75" : ""
                     }`}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-2.5">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-xs font-semibold text-[var(--text-muted)]">
-                          #{idx + 1}
-                        </span>
-                        <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
-                          {acct.email || acct.name}
-                        </span>
-                        {acct.quota?.plan && (
-                          <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] uppercase text-[var(--accent)]">
-                            {acct.quota.plan}
+                    {/* Status Corner Ribbon */}
+                    {cooling && (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
+                      </div>
+                    )}
+                    {isBanned && (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                        <span>Banned · Auto-disabled</span>
+                      </div>
+                    )}
+
+                    {/* Header: Identity & Unified Action Toolbar */}
+                    <div className={`flex flex-col sm:flex-row sm:items-start justify-between gap-3 ${cooling || isBanned ? "sm:pr-36" : ""}`}>
+                      {/* Identity Column */}
+                      <div className="flex flex-col gap-1.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-xs font-semibold text-[var(--text-muted)]">
+                            #{idx + 1}
                           </span>
-                        )}
-                        {isBanned ? (
-                          <StatusPill tone="danger" dot>
-                            Banned · Auto-disabled
-                          </StatusPill>
-                        ) : !acct.enabled ? (
-                          <StatusPill tone="neutral">Disabled</StatusPill>
-                        ) : cooling ? (
-                          <StatusPill tone="warning" dot pulse>
-                            Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})
-                          </StatusPill>
-                        ) : (
-                          <StatusPill tone="success" dot>
-                            Ready
-                          </StatusPill>
-                        )}
-                        <span className="font-mono text-xs text-[var(--text-muted)]">
-                          {primaryPx ? primaryPx.name : "Direct"}
-                          {assigned.length > 1 && !assigned[0]?.is_direct
-                            ? ` (${firstNode} → ${lastNode}, ${assigned.length})`
-                            : ""}
-                        </span>
+                          <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]" title={acct.email || acct.name}>
+                            {acct.email || acct.name}
+                          </span>
+                          {acct.quota?.plan && (
+                            <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold uppercase text-[var(--accent)]">
+                              {acct.quota.plan}
+                            </span>
+                          )}
+                          {!isBanned && !cooling && (
+                            acct.enabled ? (
+                              <StatusPill tone="success" dot>Ready</StatusPill>
+                            ) : (
+                              <StatusPill tone="neutral">Disabled</StatusPill>
+                            )
+                          )}
+                        </div>
+
+                        {/* Routing & Sync Metadata */}
+                        <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--text-muted)]">
+                          <span className="flex items-center gap-1">
+                            <Globe className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+                            <span className="text-[var(--text-secondary)] font-medium">{primaryPx ? primaryPx.name : "Direct"}</span>
+                            {assigned.length > 1 && !assigned[0]?.is_direct
+                              ? ` (${firstNode} → ${lastNode}, ${assigned.length})`
+                              : ""}
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Synced {acct.quota?.fetched_at ? formatTimeAgo(acct.quota.fetched_at, nowMs) : "pending"}
+                          </span>
+                        </div>
                       </div>
 
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        {gemWeekly && (
-                          <span className="hidden font-mono text-xs text-[var(--text-muted)] sm:inline tabular-nums">
-                            Gem {Math.round(gemWeekly.remaining_percentage)}%
-                          </span>
+                      {/* Unified Action Toolbar */}
+                      <div className="flex shrink-0 items-center gap-1.5 self-start sm:self-center">
+                        {cooling && (
+                          <button
+                            type="button"
+                            onClick={() => void onUpdateAccountConnection(acct.id, { reset_cooldown: true })}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                            title="Clear account cooldown"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Reset</span>
+                          </button>
                         )}
-                        {claudeWeekly && (
-                          <span className="hidden font-mono text-xs text-[var(--text-muted)] sm:inline tabular-nums">
-                            Cl/GPT {Math.round(claudeWeekly.remaining_percentage)}%
-                          </span>
-                        )}
+
                         <button
                           type="button"
                           disabled={refreshingAccountId === acct.id}
                           onClick={() => void handleRefreshOneAg(acct.id)}
-                          className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] disabled:opacity-45"
+                          className="inline-flex items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1.5 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-45"
                           title="Sync quotas for this account"
+                          aria-label="Sync quotas"
                         >
-                          <RefreshCw
-                            className={`h-4 w-4 ${
-                              refreshingAccountId === acct.id ? "animate-spin" : ""
-                            }`}
-                          />
+                          <RefreshCw className={`h-3.5 w-3.5 ${refreshingAccountId === acct.id ? "animate-spin text-[var(--accent)]" : ""}`} />
                         </button>
-                        {cooling && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void onUpdateAccountConnection(acct.id, {
-                                reset_cooldown: true,
-                              })
-                            }
-                            className="rounded-lg px-2.5 py-1 text-xs font-medium text-[var(--warning)] hover:bg-[var(--warning-soft)]"
-                            title="Clear account cooldown"
-                          >
-                            <RotateCcw className="mr-1 inline h-3.5 w-3.5" />
-                            Reset
-                          </button>
-                        )}
+
                         <button
                           type="button"
-                          onClick={() =>
-                            void onUpdateAccountConnection(acct.id, {
-                              enabled: !acct.enabled,
-                            })
-                          }
-                          className="rounded-lg px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                          onClick={() => void onUpdateAccountConnection(acct.id, { enabled: !acct.enabled })}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                            acct.enabled
+                              ? "border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
+                              : "border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+                          }`}
                         >
                           {acct.enabled ? "Disable" : "Enable"}
                         </button>
+
                         <button
                           type="button"
-                          onClick={() =>
-                            void onDeleteAccountConnection(acct.id, acct.email || acct.name)
-                          }
-                          className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
+                          onClick={() => void onDeleteAccountConnection(acct.id, acct.email || acct.name)}
+                          className="inline-flex items-center justify-center rounded-lg border border-transparent p-1.5 text-[var(--text-muted)] hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-400 transition-colors"
                           title="Remove account"
+                          aria-label="Remove account"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     </div>
 
-                    {availableModels.length > 0 ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {availableModels.map((mq) => {
-                          const pct = Math.max(
-                            0,
-                            Math.min(100, Math.round(mq.remaining_percentage)),
-                          );
-                          const mc = cooldownMap.get(mq.model);
-                          const coolUntil = mq.failure_cooldown_until ?? mc?.cooldown_until ?? null;
-                          const failCount = mq.failure_count ?? mc?.consecutive_failures ?? 0;
-                          const modelCooling = !!coolUntil && coolUntil > nowMs;
-                          const pctColor =
-                            pct <= 0
-                              ? "text-[var(--danger)]"
-                              : modelCooling
-                                ? "text-[var(--warning)]"
-                                : pct <= 35
-                                  ? "text-[var(--warning)]"
-                                  : "text-[var(--success)]";
-
-                          return (
-                            <span
-                              key={mq.model}
-                              title={
-                                modelCooling
-                                  ? `${mq.display_name || mq.model} · ${failCount} failure(s), cooling ${formatCountdown(coolUntil, nowMs)}`
-                                  : `${mq.display_name || mq.model} (${mq.model}): ${pct}% remaining`
-                              }
-                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${
-                                modelCooling
-                                  ? "border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[var(--warning-soft)]"
-                                  : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/75"
-                              }`}
-                            >
-                              <span className="font-medium text-[var(--text-primary)]">
-                                {mq.display_name || mq.model}
+                    {/* Quota Weekly Pools (Compact, high-contrast visual gauges) */}
+                    {(gemWeekly || claudeWeekly) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 p-2.5">
+                        {gemWeekly && (
+                          <div className="flex items-center justify-between gap-3 px-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0" />
+                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Gemini Weekly Pool</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    Math.round(gemWeekly.remaining_percentage) <= 20
+                                      ? "bg-rose-500"
+                                      : Math.round(gemWeekly.remaining_percentage) <= 50
+                                        ? "bg-amber-400"
+                                        : "bg-blue-400"
+                                  }`}
+                                  style={{ width: `${Math.round(gemWeekly.remaining_percentage)}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                {Math.round(gemWeekly.remaining_percentage)}%
                               </span>
-                              <span className={`font-mono font-semibold tabular-nums ${pctColor}`}>
-                                {pct}%
+                            </div>
+                          </div>
+                        )}
+                        {claudeWeekly && (
+                          <div className="flex items-center justify-between gap-3 px-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="h-2 w-2 rounded-full bg-purple-400 shrink-0" />
+                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Claude / GPT Pool</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    Math.round(claudeWeekly.remaining_percentage) <= 20
+                                      ? "bg-rose-500"
+                                      : Math.round(claudeWeekly.remaining_percentage) <= 50
+                                        ? "bg-amber-400"
+                                        : "bg-purple-400"
+                                  }`}
+                                  style={{ width: `${Math.round(claudeWeekly.remaining_percentage)}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                {Math.round(claudeWeekly.remaining_percentage)}%
                               </span>
-                              {modelCooling && (
-                                <span className="font-mono text-[11px] text-[var(--warning)]">
-                                  ({failCount}f · {formatCountdown(coolUntil, nowMs)})
-                                </span>
-                              )}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-[var(--text-muted)]">
-                        Click Refresh to sync unlocked Cloud Code models for this account.
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {(part?.shared_warning || acct.last_error || acct.quota?.fetched_at) && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-xs text-[var(--text-muted)]">
-                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          {part?.shared_warning && (
-                            <span className="inline-flex items-center gap-1 text-[var(--warning)]">
-                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                              Shared proxy IP — add more proxies for strict 1:1 isolation.
-                            </span>
-                          )}
-                          {acct.last_error && (
-                            <span
-                              className={`truncate font-medium ${
-                                isBanned ? "text-[var(--danger)]" : "text-[var(--warning)]"
-                              }`}
-                              title={acct.last_error}
+                    {/* Models Section: Organized & Noise-free */}
+                    {availableModels.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+                          <span className="font-medium">Model Availability ({availableModels.length})</span>
+                          {sortedModels.length > 4 && (
+                            <button
+                              type="button"
+                              onClick={() => toggleAccountExpanded(acct.id)}
+                              className="inline-flex items-center gap-1 font-medium text-[var(--accent)] hover:underline"
                             >
-                              {formatCooldownReason(acct.last_error)}
-                            </span>
+                              <span>{isExpanded ? "Show less" : `+${hasHiddenModels ? sortedModels.length - visibleModels.length : 0} more`}</span>
+                              {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                            </button>
                           )}
                         </div>
 
-                        <span className="shrink-0 font-mono text-[11px]">
-                          Synced{" "}
-                          {acct.quota?.fetched_at
-                            ? formatTimeAgo(acct.quota.fetched_at, nowMs)
-                            : "pending"}
-                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {visibleModels.map((mq) => {
+                            const pct = Math.max(0, Math.min(100, Math.round(mq.remaining_percentage)));
+                            const mc = cooldownMap.get(mq.model);
+                            const coolUntil = mq.failure_cooldown_until ?? mc?.cooldown_until ?? null;
+                            const failCount = mq.failure_count ?? mc?.consecutive_failures ?? 0;
+                            const modelCooling = !!coolUntil && coolUntil > nowMs;
+                            const pctColor =
+                              pct <= 0
+                                ? "text-rose-400 font-semibold"
+                                : modelCooling
+                                  ? "text-amber-400 font-semibold"
+                                  : pct <= 35
+                                    ? "text-amber-400 font-semibold"
+                                    : "text-emerald-400 font-medium";
+
+                            return (
+                              <div
+                                key={mq.model}
+                                className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
+                                  modelCooling
+                                    ? "border-amber-500/30 bg-amber-500/10"
+                                    : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50"
+                                }`}
+                              >
+                                <span className="truncate font-medium text-[var(--text-primary)]" title={mq.display_name || mq.model}>
+                                  {mq.display_name || mq.model}
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] tabular-nums">
+                                  {modelCooling && (
+                                    <span className="text-amber-400">
+                                      ({failCount}f · {formatCountdown(coolUntil, nowMs)})
+                                    </span>
+                                  )}
+                                  <span className={pctColor}>{pct}%</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-[var(--text-muted)] italic">
+                        Click Refresh to discover available Cloud Code models for this account.
+                      </div>
+                    )}
+
+                    {/* Notices & Banned Alerts */}
+                    {(part?.shared_warning || acct.last_error) && (
+                      <div className="space-y-1.5 pt-1">
+                        {part?.shared_warning && (
+                          <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                            <span>Shared proxy IP — add more proxies for strict 1:1 isolation.</span>
+                          </div>
+                        )}
+                        {acct.last_error && (
+                          <div
+                            className={`flex items-start gap-2 rounded-lg border px-3 py-1.5 text-xs ${
+                              isBanned
+                                ? "border-rose-500/25 bg-rose-500/10 text-rose-400"
+                                : "border-amber-500/25 bg-amber-500/10 text-amber-400"
+                            }`}
+                          >
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                            <div className="min-w-0 flex-1">
+                              <span className="font-semibold">{isBanned ? "Account auto-disabled:" : "Upstream notice:"}</span>{" "}
+                              <span>
+                                {isBanned
+                                  ? formatCooldownReason(acct.last_error).replace(/^account\s+auto-disabled:\s*/i, "")
+                                  : formatCooldownReason(acct.last_error)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </article>

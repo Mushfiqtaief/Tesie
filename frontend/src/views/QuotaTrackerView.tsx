@@ -910,21 +910,31 @@ export function QuotaTrackerView({
                 </div>
               );
 
-              const cardSurface = isBanned
-                ? "border-[color-mix(in_srgb,var(--danger)_34%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--danger-soft)_20%,var(--bg-surface))]"
-                : cooling
-                  ? "border-[color-mix(in_srgb,var(--warning)_38%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--warning-soft)_22%,var(--bg-surface))]"
-                  : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]";
+              const cardSurface = "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]";
 
               return (
                 <article
                   key={acct.id}
-                  className={`flex flex-col justify-between gap-4 rounded-2xl border p-4 sm:p-5 transition-[border-color,background-color] duration-150 ${cardSurface} ${
+                  className={`group relative overflow-hidden flex flex-col justify-between gap-4 rounded-2xl border p-4 sm:p-5 transition-colors duration-150 ${cardSurface} ${
                     !acct.enabled ? "opacity-80" : ""
                   }`}
                 >
+                  {/* Status Corner Ribbon */}
+                  {cooling && (
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      <span>Cooldown ({acct.cooldown_until && acct.cooldown_until > nowMs ? formatCountdown(acct.cooldown_until, nowMs) : "active"})</span>
+                    </div>
+                  )}
+                  {isBanned && (
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                      <span>Banned</span>
+                    </div>
+                  )}
+
                   {/* Account Header Row */}
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className={`flex flex-wrap items-start justify-between gap-3 ${cooling || isBanned ? "sm:pr-36" : ""}`}>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--text-muted)]">
@@ -1136,21 +1146,27 @@ export function QuotaTrackerView({
                 : activeProbeEnabled
                   ? `Queued · ${activeProbeIntervalSec}s check`
                   : "Queued";
-            const cardSurface = cooling
-              ? "border-[color-mix(in_srgb,var(--warning)_40%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--warning-soft)_32%,var(--bg-surface))] hover:border-[color-mix(in_srgb,var(--warning)_60%,var(--border-subtle))]"
-              : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]/35";
+            const cardSurface = "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]/35";
 
             if (viewMode === "list") {
               return (
                 <article
                   key={q.ip_key}
-                  className={`group flex flex-col justify-center gap-2 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
+                  className={`group relative overflow-hidden flex flex-col justify-center gap-2 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  {/* Status Corner Ribbon */}
+                  {cooling && (
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm backdrop-blur-md">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      <span>{cooldownBadgeLabel}</span>
+                    </div>
+                  )}
+
+                  <div className={`flex items-center justify-between gap-3 ${cooling ? "pr-36" : ""}`}>
                     <div className="flex min-w-0 flex-1 items-center gap-2.5">
                       <span
                         className={`h-2 w-2 shrink-0 rounded-full ${
-                          cooling ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]"
+                          cooling ? "bg-amber-400 animate-pulse" : "bg-[var(--success)]"
                         }`}
                       />
                       <span className="truncate font-mono text-sm font-semibold text-[var(--text-primary)]">
@@ -1166,11 +1182,7 @@ export function QuotaTrackerView({
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2 tabular-nums">
-                      {cooling ? (
-                        <span className="font-mono text-xs font-semibold text-[var(--warning)]">
-                          {cooldownBadgeLabel}
-                        </span>
-                      ) : (
+                      {!cooling && (
                         <span className="font-mono text-xs text-[var(--text-muted)]">
                           {usedReqs > 0
                             ? `${usedReqs} req${usedToks > 0 ? ` · ${formatCompactNumber(usedToks)}` : ""}`
@@ -1200,7 +1212,7 @@ export function QuotaTrackerView({
                             type="button"
                             disabled={isVerifyingThis}
                             onClick={() => void handleVerifyResetSingle(q.ip_key)}
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-[var(--warning)] hover:bg-[var(--bg-elevated)] disabled:opacity-45"
+                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-amber-400 hover:bg-[var(--bg-elevated)] disabled:opacity-45"
                             title="Verify live OpenCode availability before resetting cooldown"
                           >
                             {isVerifyingThis ? (
@@ -1217,10 +1229,10 @@ export function QuotaTrackerView({
 
                   {cooling && cleanReason && (
                     <div
-                      className="flex items-center gap-1.5 pl-4 text-xs text-[var(--warning)]"
+                      className="flex items-center gap-1.5 pl-4 text-xs text-amber-400/90"
                       title={q.last_error || undefined}
                     >
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
                       <span className="truncate">{cleanReason}</span>
                     </div>
                   )}
@@ -1252,13 +1264,21 @@ export function QuotaTrackerView({
             return (
               <article
                 key={q.ip_key}
-                className={`group flex flex-col justify-between gap-2 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
+                className={`group relative overflow-hidden flex flex-col justify-between gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
               >
-                <div className="flex items-center justify-between gap-2">
+                {/* Status Corner Ribbon */}
+                {cooling && (
+                  <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm backdrop-blur-md">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    <span>{cooldownBadgeLabel}</span>
+                  </div>
+                )}
+
+                <div className={`flex items-center justify-between gap-2 ${cooling ? "pr-36" : ""}`}>
                   <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${
-                        cooling ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]"
+                        cooling ? "bg-amber-400 animate-pulse" : "bg-[var(--success)]"
                       }`}
                     />
                     <span className="truncate font-mono text-sm font-semibold text-[var(--text-primary)]">
@@ -1267,12 +1287,6 @@ export function QuotaTrackerView({
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1 tabular-nums">
-                    {cooling && (
-                      <span className="font-mono text-xs font-semibold text-[var(--warning)]">
-                        {cooldownBadgeLabel}
-                      </span>
-                    )}
-
                     <div
                       className={`flex items-center gap-0.5 transition-opacity ${
                         cooling
@@ -1295,7 +1309,7 @@ export function QuotaTrackerView({
                           type="button"
                           disabled={isVerifyingThis}
                           onClick={() => void handleVerifyResetSingle(q.ip_key)}
-                          className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--warning)] disabled:opacity-45"
+                          className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-amber-400 disabled:opacity-45"
                           title="Verify live OpenCode availability & reset cooldown"
                           aria-label={`Verify and reset ${displayIp}`}
                         >
@@ -1346,18 +1360,18 @@ export function QuotaTrackerView({
 
                 {cooling && cleanReason && (
                   <div
-                    className="flex items-center justify-between gap-2 pl-4 pt-0.5 text-xs text-[var(--warning)]"
+                    className="flex items-center justify-between gap-2 pl-4 pt-0.5 text-xs text-amber-400/90"
                     title={q.last_error || undefined}
                   >
                     <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
                       <span className="truncate">{cleanReason}</span>
                     </span>
                     <button
                       type="button"
                       disabled={isVerifyingThis}
                       onClick={() => void handleVerifyResetSingle(q.ip_key)}
-                      className="shrink-0 font-semibold underline-offset-2 hover:underline disabled:opacity-45"
+                      className="shrink-0 font-semibold text-amber-400 underline-offset-2 hover:underline disabled:opacity-45"
                     >
                       {isVerifyingThis ? "Checking…" : "Verify"}
                     </button>
