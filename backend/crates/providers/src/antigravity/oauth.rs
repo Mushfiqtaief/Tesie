@@ -52,6 +52,14 @@ pub fn antigravity_client_metadata() -> Value {
     })
 }
 
+pub fn is_account_unlicensed(body_or_err: &str) -> bool {
+    let lower = body_or_err.to_ascii_lowercase();
+    lower.contains("subscription_required")
+        || lower.contains("you do not have a valid license of this product")
+        || lower.contains("request-license")
+        || (lower.contains("permission_denied") && lower.contains("1001"))
+}
+
 pub fn is_account_service_disabled(body_or_err: &str) -> bool {
     let lower = body_or_err.to_ascii_lowercase();
     lower.contains("service has been disabled in this account")
@@ -61,6 +69,7 @@ pub fn is_account_service_disabled(body_or_err: &str) -> bool {
         || lower.contains("account has been suspended")
         || lower.contains("tos_violation")
         || (lower.contains("permission_denied") && lower.contains("disabled"))
+        || is_account_unlicensed(body_or_err)
 }
 
 fn default_oauth_client_id() -> String {
@@ -1363,16 +1372,21 @@ pub async fn refresh_account_quota(
         let code = resp.status().as_u16();
         let err_body = resp.text().await.unwrap_or_default();
         if code == 403 && is_account_service_disabled(&err_body) {
+            let reason = if is_account_unlicensed(&err_body) {
+                "Disabled: No active Gemini Code Assist license on this account (#3501)."
+            } else {
+                "Banned: This service has been disabled in this account for violation of Terms of Service."
+            };
             let _ = store
                 .connections()
-                .disable_banned_connection(
-                    &conn.id,
-                    "Banned: This service has been disabled in this account for violation of Terms of Service.",
-                    now_ms(),
-                )
+                .disable_banned_connection(&conn.id, reason, now_ms())
                 .await;
             return Err(TesRouteError::BadRequest(
-                "Account auto-disabled: Terms of Service violation".to_string(),
+                if is_account_unlicensed(&err_body) {
+                    "Account auto-disabled: No active license".to_string()
+                } else {
+                    "Account auto-disabled: Terms of Service violation".to_string()
+                },
             ));
         }
         warn!(conn = %conn.id, status = code, "Antigravity fetchAvailableModels returned non-200");

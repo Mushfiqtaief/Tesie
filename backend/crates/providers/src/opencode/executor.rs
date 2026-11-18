@@ -1136,13 +1136,19 @@ impl OpenCodeEngine {
                     Err(err) => {
                         let msg = err.to_string();
                         let lat = (now_ms() - attempt_start).max(0);
+                        let is_local_relay_unreachable = msg.contains("127.0.0.1:29090")
+                            || msg.contains("connection refused")
+                            || msg.contains("error sending request for url");
                         warn!(
                             proxy = %candidate.proxy.name,
                             error = %msg,
-                            "relay transport error; marking proxy idle immediately"
+                            is_local_relay_unreachable,
+                            "relay transport error; handling candidate failure"
                         );
-                        self.quarantine_broken_proxy(&candidate.proxy.id, &candidate.proxy.name)
-                            .await;
+                        if !is_local_relay_unreachable {
+                            self.quarantine_broken_proxy(&candidate.proxy.id, &candidate.proxy.name)
+                                .await;
+                        }
                         attempt_legs.push(AttemptLeg {
                             attempt: attempt_num,
                             proxy: candidate.proxy.name.clone(),
@@ -1153,7 +1159,11 @@ impl OpenCodeEngine {
                             model: Some(parsed.model_id.clone()),
                             wire_model: None,
                             reasoning_level: reasoning_level.clone(),
-                            cooldown_applied: Some("quarantined until healthy".into()),
+                            cooldown_applied: if is_local_relay_unreachable {
+                                Some("relay daemon unreachable".into())
+                            } else {
+                                Some("quarantined until healthy".into())
+                            },
                             session_id: Some(session.clone()),
                             detail: Some(truncate_snippet(&msg, 240)),
                         });
@@ -1186,6 +1196,12 @@ impl OpenCodeEngine {
                             })
                             .await;
                         self.mark_error_provider(provider.id());
+                        if is_local_relay_unreachable {
+                            warn!("local TesieCore relay daemon (port 29090) is unreachable; aborting candidate pool rotation immediately");
+                            return Err(TesRouteError::ProxyRelay(
+                                "TesieCore local relay daemon is unreachable (port 29090). Ensure tesie-core is running.".into(),
+                            ));
+                        }
                         last_error = Some(msg);
                         break;
                     }

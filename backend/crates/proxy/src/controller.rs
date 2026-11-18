@@ -192,6 +192,7 @@ impl MihomoController {
         });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        #[allow(unused_assignments)]
         let mut last_err: Option<String> = None;
         loop {
             if let Some(status) = controller.try_wait_child()? {

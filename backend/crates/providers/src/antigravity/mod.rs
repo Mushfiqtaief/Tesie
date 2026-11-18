@@ -32,7 +32,7 @@ use crate::translator::{translate_request, StreamTranslator};
 use oauth::{
     antigravity_hub_ua, chat_base_url, complete_oauth_from_callback_or_code,
     ensure_fresh_auth_for_connection, fallback_project_id_for_seed,
-    import_antigravity_refresh_token, is_account_service_disabled,
+    import_antigravity_refresh_token, is_account_service_disabled, is_account_unlicensed,
     normalize_quota_snapshot_for_display, refresh_account_quota, start_local_oauth_flow,
     OAuthSessionPollStatus, StartedOAuthFlow, DEFAULT_ANTIGRAVITY_PROJECT_ID,
 };
@@ -1034,16 +1034,29 @@ impl AntigravityEngine {
                                 let err_ts = now_ms();
                                 let lat = (err_ts - leg_start).max(0);
                                 let (fc, cooldown_lbl, phase) = if is_account_service_disabled(&raw_detail) {
+                                    let (reason, lbl, kind) = if is_account_unlicensed(&raw_detail) {
+                                        (
+                                            "Disabled: No active Gemini Code Assist license on this account (#3501).",
+                                            "auto-disabled (no license)",
+                                            "account_unlicensed_403",
+                                        )
+                                    } else {
+                                        (
+                                            "Banned: This service has been disabled in this account for violation of Terms of Service.",
+                                            "auto-disabled (ToS ban)",
+                                            "account_banned_403",
+                                        )
+                                    };
                                     let _ = self
                                         .store
                                         .connections()
                                         .disable_banned_connection(
                                             &account.id,
-                                            "Banned: This service has been disabled in this account for violation of Terms of Service.",
+                                            reason,
                                             err_ts,
                                         )
                                         .await;
-                                    (None, "auto-disabled (ToS ban)".to_string(), "account_banned_403")
+                                    (None, lbl.to_string(), kind)
                                 } else if is_quota && is_quota_exhaustion_error(429, &raw_detail) {
                                     saw_quota_exhausted = true;
                                     let _ = self.record_model_quota_block(
@@ -1142,6 +1155,7 @@ impl AntigravityEngine {
                     let err_body = resp.text().await.unwrap_or_default();
                     let err_ts = now_ms();
                     let lat = (err_ts - leg_start).max(0);
+                    let is_unlicensed = is_account_unlicensed(&err_body);
                     let account_tos_disabled = is_account_service_disabled(&err_body);
 
                     if (status == 401 || (status == 403 && !account_tos_disabled))
@@ -1160,21 +1174,30 @@ impl AntigravityEngine {
                         )));
                     }
 
-                    // Classify outcome into Banned vs Quota Exhausted vs Escalating Model Failure Cooldown
+                    // Classify outcome into Banned vs Unlicensed vs Quota Exhausted vs Escalating Model Failure Cooldown
                     let (cooldown_lbl, fc, err_kind) = if account_tos_disabled {
+                        let (reason, lbl, kind) = if is_unlicensed {
+                            (
+                                "Disabled: No active Gemini Code Assist license on this account (#3501).",
+                                "auto-disabled (no license)",
+                                "account_unlicensed_403",
+                            )
+                        } else {
+                            (
+                                "Banned: This service has been disabled in this account for violation of Terms of Service.",
+                                "auto-disabled (ToS ban)",
+                                "account_banned_403",
+                            )
+                        };
                         let _ = self
                             .store
                             .connections()
-                            .disable_banned_connection(
-                                &account.id,
-                                "Banned: This service has been disabled in this account for violation of Terms of Service.",
-                                err_ts,
-                            )
+                            .disable_banned_connection(&account.id, reason, err_ts)
                             .await;
                         (
-                            Some("auto-disabled (ToS ban)".to_string()),
+                            Some(lbl.to_string()),
                             None,
-                            "account_banned_403".to_string(),
+                            kind.to_string(),
                         )
                     } else if is_quota_exhaustion_error(status, &err_body) {
                         saw_quota_exhausted = true;

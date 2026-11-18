@@ -158,6 +158,11 @@ pub fn run_tray_loop(control: Arc<DaemonControl>) {
             std::ptr::null(),
         );
         if hwnd == 0 {
+            // If running in headless / non-interactive session or window creation failed,
+            // keep the daemon supervisor alive in a wait loop instead of terminating
+            while !control.quit.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
             return;
         }
 
