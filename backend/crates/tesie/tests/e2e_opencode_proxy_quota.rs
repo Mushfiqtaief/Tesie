@@ -458,7 +458,9 @@ async fn e2e_opencode_multi_ip_proxy_quota_and_failover() {
         .unwrap();
     assert_eq!(dead_test_res["alive"].as_bool(), Some(false));
 
-    // Verify OpenCode Free (round-robin + per_ip) and Antigravity (fallback + per_account) exist in /api/admin/providers
+    // Verify OpenCode Free (round-robin + per_ip) and Antigravity (fallback + per_account)
+    // are present. Look them up by id rather than by index: the catalog grows as providers
+    // are added, and a positional assertion breaks every time one is.
     let provs_json: Value = client
         .get(format!("{base}/api/admin/providers"))
         .send()
@@ -468,13 +470,23 @@ async fn e2e_opencode_multi_ip_proxy_quota_and_failover() {
         .await
         .unwrap();
     let provs = provs_json["providers"].as_array().unwrap();
-    assert_eq!(provs.len(), 2);
-    assert_eq!(provs[0]["id"].as_str(), Some("opencode"));
-    assert_eq!(provs[0]["selection_strategy"].as_str(), Some("round-robin"));
-    assert_eq!(provs[0]["quota_tracking"].as_str(), Some("per_ip"));
-    assert_eq!(provs[1]["id"].as_str(), Some("antigravity"));
-    assert_eq!(provs[1]["selection_strategy"].as_str(), Some("fallback"));
-    assert_eq!(provs[1]["quota_tracking"].as_str(), Some("per_account"));
+    let find_prov = |id: &str| {
+        provs
+            .iter()
+            .find(|p| p["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("provider '{id}' missing from /api/admin/providers"))
+    };
+
+    let opencode = find_prov("opencode");
+    assert_eq!(opencode["selection_strategy"].as_str(), Some("round-robin"));
+    assert_eq!(opencode["quota_tracking"].as_str(), Some("per_ip"));
+
+    let antigravity = find_prov("antigravity");
+    assert_eq!(
+        antigravity["selection_strategy"].as_str(),
+        Some("fallback")
+    );
+    assert_eq!(antigravity["quota_tracking"].as_str(), Some("per_account"));
 
     // 3. Probe exit IPs through mihomo
     let probe_url = format!("{canonical_base_url}/trace");
