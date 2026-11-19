@@ -17,7 +17,6 @@ import {
   KeyRound,
   LayoutGrid,
   Link2,
-  List,
   Loader2,
   Lock,
   Pencil,
@@ -28,6 +27,7 @@ import {
   Save,
   Search,
   Sparkles,
+  Table,
   Trash2,
   UserCheck,
   Zap,
@@ -249,10 +249,11 @@ export function ProvidersModelsView({
     initialProviderId ?? null,
   );
   const [search, setSearch] = useState("");
-  const [modelsViewMode, setModelsViewMode] = useState<"table" | "list">(() => {
+  const [modelsViewMode, setModelsViewMode] = useState<"table" | "card">(() => {
     try {
       const saved = localStorage.getItem("tesie_provider_models_view");
-      if (saved === "table" || saved === "list") return saved;
+      if (saved === "table") return "table";
+      if (saved === "card" || saved === "cards" || saved === "list") return "card";
     } catch {
       // ignore
     }
@@ -1262,7 +1263,7 @@ export function ProvidersModelsView({
   ).length;
   const coolingQuotas = ipQuotas.length - activeQuotas;
 
-  function handleChangeModelsView(next: "table" | "list") {
+  function handleChangeModelsView(next: "table" | "card") {
     setModelsViewMode(next);
     try {
       localStorage.setItem("tesie_provider_models_view", next);
@@ -2149,87 +2150,94 @@ export function ProvidersModelsView({
               <button
                 type="button"
                 onClick={() => handleChangeModelsView("table")}
-                title="Table view (4 items per line)"
+                title="Table view (Compact single-line rows)"
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors ${
                   modelsViewMode === "table"
                     ? "bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs"
                     : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
-                <LayoutGrid className="h-4 w-4" />
+                <Table className="h-4 w-4" />
                 Table
               </button>
               <button
                 type="button"
-                onClick={() => handleChangeModelsView("list")}
-                title="List view (2 items per line)"
+                onClick={() => handleChangeModelsView("card")}
+                title="Card view (Grid cards)"
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors ${
-                  modelsViewMode === "list"
+                  modelsViewMode === "card"
                     ? "bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs"
                     : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
-                <List className="h-4 w-4" />
-                List
+                <LayoutGrid className="h-4 w-4" />
+                Cards
               </button>
             </div>
           </div>
         }
       >
-        <div className="bg-[var(--bg-elevated)]/25 p-4 space-y-3">
-          <div
-            className={`grid gap-2.5 ${
-              modelsViewMode === "list"
-                ? "grid-cols-1 md:grid-cols-2"
-                : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
-            }`}
-          >
-            {filteredModels.map((fullSpec) => {
-              const slashIdx = fullSpec.indexOf("/");
-              const prefix = slashIdx >= 0 ? fullSpec.slice(0, slashIdx + 1) : "";
-              const modelSlug = slashIdx >= 0 ? fullSpec.slice(slashIdx + 1) : fullSpec;
-              const agState = isAntigravity
-                ? agModelStateMap.get(modelSlug.toLowerCase())
-                : undefined;
-              const isLockedForUser = Boolean(isAntigravity && agState && !agState.unlocked);
-              const modelEntry =
-                modelsEntryMap.get(fullSpec.toLowerCase()) ||
-                modelsEntryMap.get(modelSlug.toLowerCase());
-              const caps = getModelCapabilities(fullSpec, modelEntry);
-              const limits = getModelLimits(fullSpec, modelEntry);
-              const cardAccents = getModelCardClasses(caps);
+        {filteredModels.length === 0 ? (
+          <div className="bg-[var(--bg-elevated)]/25 p-8 text-center text-xs text-[var(--text-muted)] italic">
+            No models match &ldquo;{search}&rdquo;
+          </div>
+        ) : modelsViewMode === "table" ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+                  <th className="py-2 px-3.5">Model</th>
+                  <th className="py-2 px-3">Capabilities</th>
+                  <th className="py-2 px-3">Context & Limits</th>
+                  {isAntigravity && <th className="py-2 px-3">Quota</th>}
+                  <th className="py-2 px-3.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]/40 font-mono">
+                {filteredModels.map((fullSpec) => {
+                  const slashIdx = fullSpec.indexOf("/");
+                  const prefix = slashIdx >= 0 ? fullSpec.slice(0, slashIdx + 1) : "";
+                  const modelSlug = slashIdx >= 0 ? fullSpec.slice(slashIdx + 1) : fullSpec;
+                  const agState = isAntigravity
+                    ? agModelStateMap.get(modelSlug.toLowerCase())
+                    : undefined;
+                  const isLockedForUser = Boolean(isAntigravity && agState && !agState.unlocked);
+                  const modelEntry =
+                    modelsEntryMap.get(fullSpec.toLowerCase()) ||
+                    modelsEntryMap.get(modelSlug.toLowerCase());
+                  const caps = getModelCapabilities(fullSpec, modelEntry);
+                  const limits = getModelLimits(fullSpec, modelEntry);
 
-              return (
-                <div
-                  key={fullSpec}
-                  className={`group relative overflow-hidden flex flex-col justify-between gap-3 rounded-xl px-3.5 py-3 transition-[border-color,background-color,box-shadow] duration-200 ${cardAccents} ${
-                    isLockedForUser
-                      ? "opacity-45 grayscale"
-                      : ""
-                  }`}
-                  title={
-                    isLockedForUser
-                      ? `${fullSpec} is not unlocked on your connected Antigravity account(s)`
-                      : limits?.tooltip
-                      ? `${fullSpec} (${limits.tooltip})`
-                      : fullSpec
-                  }
-                >
-                  <div className="min-w-0 space-y-2">
-                    {/* Header Row: Model spec on left, capability icons in top-right corner */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1 truncate font-mono text-[13px]" title={fullSpec}>
-                        {prefix && <span className="text-[var(--text-muted)]">{prefix}</span>}
-                        <span className="font-semibold text-[var(--text-primary)]">{modelSlug}</span>
-                      </div>
-                      <ModelCapabilityIcons caps={caps} />
-                    </div>
+                  return (
+                    <tr
+                      key={fullSpec}
+                      className={`group hover:bg-[var(--bg-elevated)]/40 transition-colors ${
+                        isLockedForUser ? "opacity-45 grayscale" : ""
+                      }`}
+                    >
+                      {/* Model Spec */}
+                      <td className="py-1.5 px-3.5 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {prefix && (
+                            <span className="text-[11px] text-[var(--text-muted)] shrink-0">{prefix}</span>
+                          )}
+                          <span className="font-semibold text-[var(--text-primary)] truncate">{modelSlug}</span>
+                        </div>
+                      </td>
 
-                    {/* Second Row: Token Limit Badge & Quota / Lock Status */}
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
-                      <ModelLimitBadge limits={limits} />
-                      {(isLockedForUser || agState) && (
-                        <div className="text-[11px] shrink-0">
+                      {/* Capabilities */}
+                      <td className="py-1.5 px-3 whitespace-nowrap">
+                        <ModelCapabilityBadges caps={caps} compact />
+                      </td>
+
+                      {/* Context & Limits */}
+                      <td className="py-1.5 px-3 whitespace-nowrap font-sans">
+                        <ModelLimitBadge limits={limits} compact />
+                      </td>
+
+                      {/* Quota (if Antigravity) */}
+                      {isAntigravity && (
+                        <td className="py-1.5 px-3 whitespace-nowrap text-[11px]">
                           {isLockedForUser ? (
                             <span className="inline-flex items-center gap-1 text-[var(--text-muted)]">
                               <Lock className="h-3 w-3" />
@@ -2239,42 +2247,148 @@ export function ProvidersModelsView({
                             <span className="font-mono text-[var(--success)] font-medium tabular-nums">
                               {Math.round(agState.maxRemaining)}% left
                             </span>
-                          ) : null}
-                        </div>
+                          ) : (
+                            <span className="text-[var(--text-muted)]">—</span>
+                          )}
+                        </td>
                       )}
+
+                      {/* Actions */}
+                      <td className="py-1.5 px-3.5 whitespace-nowrap text-right font-sans">
+                        <div className="inline-flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => copyText(fullSpec, fullSpec)}
+                            className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] transition-colors"
+                            title="Copy model ID"
+                            aria-label={`Copy ${fullSpec}`}
+                          >
+                            {copiedId === fullSpec ? (
+                              <Check className="h-3.5 w-3.5 text-[var(--success)]" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLockedForUser}
+                            onClick={() => onTestModel(fullSpec)}
+                            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)] border border-[var(--border-subtle)]/40 hover:border-[var(--border-strong)] transition-colors disabled:opacity-40"
+                            title={`Test ${fullSpec} in Playground`}
+                          >
+                            <Play className="h-3 w-3" />
+                            <span>Test</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="bg-[var(--bg-elevated)]/25 p-3 sm:p-4">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-2.5">
+              {filteredModels.map((fullSpec) => {
+                const slashIdx = fullSpec.indexOf("/");
+                const prefix = slashIdx >= 0 ? fullSpec.slice(0, slashIdx + 1) : "";
+                const modelSlug = slashIdx >= 0 ? fullSpec.slice(slashIdx + 1) : fullSpec;
+                const agState = isAntigravity
+                  ? agModelStateMap.get(modelSlug.toLowerCase())
+                  : undefined;
+                const isLockedForUser = Boolean(isAntigravity && agState && !agState.unlocked);
+                const modelEntry =
+                  modelsEntryMap.get(fullSpec.toLowerCase()) ||
+                  modelsEntryMap.get(modelSlug.toLowerCase());
+                const caps = getModelCapabilities(fullSpec, modelEntry);
+                const limits = getModelLimits(fullSpec, modelEntry);
+                const cardAccents = getModelCardClasses(caps);
+
+                return (
+                  <div
+                    key={fullSpec}
+                    className={`group relative overflow-hidden flex flex-col justify-between gap-1.5 rounded-xl p-2.5 sm:p-3 transition-[border-color,background-color,box-shadow] duration-150 ${cardAccents} ${
+                      isLockedForUser
+                        ? "opacity-45 grayscale"
+                        : ""
+                    }`}
+                    title={
+                      isLockedForUser
+                        ? `${fullSpec} is not unlocked on your connected Antigravity account(s)`
+                        : limits?.tooltip
+                        ? `${fullSpec} (${limits.tooltip})`
+                        : fullSpec
+                    }
+                  >
+                    {/* Top Row: Model Slug + Capability Icons + Copy Button */}
+                    <div className="flex items-start justify-between gap-1 min-w-0">
+                      <div className="min-w-0 flex-1 truncate font-mono text-xs sm:text-[13px]" title={fullSpec}>
+                        {prefix && (
+                          <span className="text-[10px] text-[var(--text-muted)] block truncate leading-none mb-0.5">
+                            {prefix}
+                          </span>
+                        )}
+                        <span className="font-semibold text-[var(--text-primary)] truncate block leading-tight">
+                          {modelSlug}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <ModelCapabilityIcons caps={caps} />
+                        <button
+                          type="button"
+                          onClick={() => copyText(fullSpec, fullSpec)}
+                          className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                          title="Copy model ID"
+                          aria-label={`Copy ${fullSpec}`}
+                        >
+                          {copiedId === fullSpec ? (
+                            <Check className="h-3 w-3 text-[var(--success)]" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Limits / Quota on left, Test action on right */}
+                    <div className="flex items-center justify-between gap-1 pt-0.5 min-w-0">
+                      <div className="flex items-center gap-1 min-w-0 flex-nowrap overflow-hidden">
+                        <ModelLimitBadge limits={limits} compact />
+                        {(isLockedForUser || agState) && (
+                          <span className="text-[10px] shrink-0 font-mono">
+                            {isLockedForUser ? (
+                              <span className="inline-flex items-center gap-0.5 text-[var(--text-muted)]">
+                                <Lock className="h-2.5 w-2.5" />
+                                Locked
+                              </span>
+                            ) : agState ? (
+                              <span className="font-mono text-[var(--success)] font-medium tabular-nums">
+                                {Math.round(agState.maxRemaining)}%
+                              </span>
+                            ) : null}
+                          </span>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={isLockedForUser}
+                        onClick={() => onTestModel(fullSpec)}
+                        className="inline-flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)] border border-[var(--border-subtle)]/40 hover:border-[var(--border-strong)] transition-colors disabled:opacity-40"
+                        title={`Test ${fullSpec} in Playground`}
+                        aria-label={`Test ${fullSpec} in Playground`}
+                      >
+                        <Play className="h-2.5 w-2.5" />
+                        <span className="hidden sm:inline">Test</span>
+                      </button>
                     </div>
                   </div>
-
-                  <div className="flex shrink-0 items-center justify-end gap-1 border-t border-[var(--border-subtle)]/40 pt-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    <button
-                      type="button"
-                      onClick={() => copyText(fullSpec, fullSpec)}
-                      className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-                      title="Copy model ID"
-                      aria-label={`Copy ${fullSpec}`}
-                    >
-                      {copiedId === fullSpec ? (
-                        <Check className="h-3.5 w-3.5 text-[var(--success)]" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isLockedForUser}
-                      onClick={() => onTestModel(fullSpec)}
-                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)] disabled:opacity-45"
-                      title={`Test ${fullSpec} in Playground`}
-                    >
-                      <Play className="h-3.5 w-3.5" />
-                      Test
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </Card>
 
       {/* Connect Antigravity Google Account Modal */}

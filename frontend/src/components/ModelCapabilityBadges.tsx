@@ -14,13 +14,19 @@ export function ModelLimitBadge({
   }
 
   if (compact) {
+    const compactText =
+      limits.context != null && limits.output != null
+        ? `${formatTokenLimit(limits.context)} / ${formatTokenLimit(limits.output)}`
+        : limits.badgeLabel;
+
     return (
       <span
         title={limits.tooltip}
-        className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--text-secondary)] bg-[var(--bg-elevated)]/90 px-1.5 py-0.5 border border-[var(--border-subtle)] rounded cursor-help shadow-2xs"
+        className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--text-secondary)] bg-[var(--bg-elevated)]/90 px-1.5 py-0.5 border border-[var(--border-subtle)] rounded cursor-help shadow-2xs whitespace-nowrap shrink-0"
       >
         <Layers className="h-2.5 w-2.5 text-[var(--text-muted)] shrink-0" />
-        <span>{limits.badgeLabel}</span>
+        <span className="sm:hidden font-mono truncate">{compactText}</span>
+        <span className="hidden sm:inline font-mono">{limits.badgeLabel}</span>
       </span>
     );
   }
