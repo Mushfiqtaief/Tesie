@@ -211,10 +211,68 @@ impl ModelCatalogCache {
         if let Ok(combos) = store.combos().list_enabled().await {
             for c in combos {
                 if seen.insert(c.name.clone()) {
-                    let (attachment, reasoning, modalities, tool_call) =
-                        infer_model_capabilities(&c.name, None, None, None, None);
-                    let (limit, context_length, max_output_tokens) =
-                        infer_model_limits(&c.name, None);
+                    let mut combo_has_vision = false;
+                    let mut combo_has_reasoning = false;
+                    let mut combo_has_tools = false;
+                    let mut combo_modalities = HashSet::new();
+                    let mut min_ctx: Option<i64> = None;
+                    let mut min_out: Option<i64> = None;
+
+                    for m in &c.models {
+                        let (att, reas, mods, tc) =
+                            infer_model_capabilities(m, None, None, None, None);
+                        if att == Some(true) {
+                            combo_has_vision = true;
+                        }
+                        if reas == Some(true) {
+                            combo_has_reasoning = true;
+                        }
+                        if tc != Some(false) {
+                            combo_has_tools = true;
+                        }
+                        if let Some(list) = mods {
+                            for mod_item in list {
+                                combo_modalities.insert(mod_item);
+                            }
+                        }
+                        let (_, ctx, out) = infer_model_limits(m, None);
+                        if let Some(c_val) = ctx {
+                            min_ctx = Some(min_ctx.map_or(c_val, |cur| cur.min(c_val)));
+                        }
+                        if let Some(o_val) = out {
+                            min_out = Some(min_out.map_or(o_val, |cur| cur.min(o_val)));
+                        }
+                    }
+
+                    let (attachment, reasoning, modalities, tool_call) = if c.models.is_empty() {
+                        infer_model_capabilities(&c.name, None, None, None, None)
+                    } else {
+                        (
+                            if combo_has_vision { Some(true) } else { None },
+                            if combo_has_reasoning { Some(true) } else { None },
+                            if !combo_modalities.is_empty() {
+                                Some(combo_modalities.into_iter().collect())
+                            } else {
+                                None
+                            },
+                            if combo_has_tools { Some(true) } else { None },
+                        )
+                    };
+
+                    let (limit, context_length, max_output_tokens) = if min_ctx.is_some() || min_out.is_some() {
+                        (
+                            Some(ModelLimitInfo {
+                                context: min_ctx,
+                                input: min_ctx,
+                                output: min_out,
+                            }),
+                            min_ctx,
+                            min_out,
+                        )
+                    } else {
+                        infer_model_limits(&c.name, None)
+                    };
+
                     out.push(OpenAiModelEntry {
                         display_name: c.name.clone(),
                         id: c.name,
