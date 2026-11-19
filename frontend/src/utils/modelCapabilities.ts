@@ -28,7 +28,7 @@ export function getModelCapabilities(
   const hasThinking = Boolean(
     entry?.reasoning === true ||
     (entry?.supported_levels && entry.supported_levels.length > 0) ||
-    /thinking|reasoning|reasoner|r1|qwq|o1|o3|o4|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5|gemini-3|gemini-2\.5|claude-opus|opus-4|sonnet-4|claude-3\.7|claude-3-7/i.test(
+    /thinking|reasoning|reasoner|r1|qwq|o1|o3|o4|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5|gemini-3|gemini-2\.5|claude-opus|opus-4|sonnet-4|claude-3\.7|claude-3-7|gemma-4|gpt-oss-120b|qwen3\.8|qwen3\.6|qwen3\.5/i.test(
       modelSlug,
     )
   );
@@ -155,8 +155,8 @@ export function getModelLimits(
       context = 200000;
       output = 100000;
     } else if (slug.includes("1017") || slug.includes("deepseek-v4.1-flash-1017")) {
-      context = 1000000;
-      output = 384000;
+      context = 1048576;
+      output = 262144;
     } else if (slug.includes("deepseek-v4.1-flash")) {
       context = 200000;
       output = 32000;
@@ -176,27 +176,36 @@ export function getModelLimits(
     } else if (slug.includes("kimi-k2")) {
       context = 262144;
       output = 262144;
+    } else if (slug.includes("qwen3.8") || slug.includes("qwen3.6-27b") || slug.includes("qwen3.5-397b")) {
+      context = 262144;
+      output = 262144;
+    } else if (slug.includes("qwen3.6-35b") || slug.includes("qwen3.5-9b") || slug.includes("gemma-4") || slug.includes("nemotron3-nano")) {
+      context = 262144;
+      output = 65536;
+    } else if (slug.includes("qwen2.5-vl")) {
+      context = 32768;
+      output = 32768;
+    } else if (slug.includes("qwen3-vl")) {
+      context = 32768;
+      output = 16384;
     } else if (slug.includes("deepseek-v4-pro") || slug.includes("deepseek-v4")) {
       context = 64000;
       output = 8192;
     } else if (slug.includes("deepseek") || slug.includes("r1")) {
       context = 64000;
       output = 8192;
-    } else if (slug.includes("llama-3_3-70b") || slug.includes("llama-3.3-70b")) {
+    } else if (slug.includes("llama-3_3-70b") || slug.includes("llama-3.3-70b") || slug.includes("mistral-small") || slug.includes("gpt-oss-120b")) {
       context = 131072;
       output = 131072;
-    } else if (slug.includes("mistral-small")) {
+    } else if (slug.includes("gpt-oss-20b") || slug.includes("nemotron3-omni") || slug.includes("laguna-xs")) {
       context = 131072;
-      output = 131072;
-    } else if (slug.includes("gpt-oss-120b")) {
-      context = 131072;
-      output = 131072;
-    } else if (slug.includes("qwen3.6-27b") || slug.includes("qwen3.6") || slug.includes("qwen3.5-397b") || slug.includes("qwen3.5-9b")) {
-      context = 262144;
       output = 65536;
-    } else if (slug.includes("qwen2.5-vl") || slug.includes("qwen3-vl")) {
+    } else if (slug.includes("olala-v1.0-translate")) {
+      context = 8192;
+      output = 8192;
+    } else if (slug.includes("olala") || slug.includes("qwen3guard")) {
       context = 32768;
-      output = 32768;
+      output = 16384;
     } else if (slug.includes("qwen") || slug.includes("llama")) {
       context = 131072;
       output = 8192;

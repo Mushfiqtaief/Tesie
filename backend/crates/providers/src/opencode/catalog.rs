@@ -14,6 +14,7 @@ use tesie_store::{Store, now_ms};
 
 const CACHE_TTL_MS: i64 = 10 * 60 * 1000;
 const CAPABILITIES_URL: &str = "https://models.opencode.ai/api.json";
+pub const OVH_MODELS_URL: &str = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelLimitInfo {
@@ -73,6 +74,8 @@ fn infer_model_limits(
         (Some(128_000), None, Some(16_384))
     } else if lower.contains("o1") || lower.contains("o3") {
         (Some(200_000), None, Some(100_000))
+    } else if lower.contains("1017") || lower.contains("deepseek-v4.1-flash-1017") {
+        (Some(1_048_576), None, Some(262_144))
     } else if lower.contains("deepseek-v4.1-flash") {
         if lower.contains("free") {
             (Some(200_000), None, Some(32_000))
@@ -95,6 +98,22 @@ fn infer_model_limits(
         (Some(262_144), None, Some(if lower.contains("lightning") { 262_144 } else { 65_536 }))
     } else if lower.contains("kimi-k2") {
         (Some(262_144), None, Some(262_144))
+    } else if lower.contains("qwen3.8") || lower.contains("qwen3.6-27b") || lower.contains("qwen3.5-397b") {
+        (Some(262_144), None, Some(262_144))
+    } else if lower.contains("qwen3.6-35b") || lower.contains("qwen3.5-9b") || lower.contains("gemma-4") || lower.contains("nemotron3-nano") {
+        (Some(262_144), None, Some(65_536))
+    } else if lower.contains("qwen2.5-vl") {
+        (Some(32_768), None, Some(32_768))
+    } else if lower.contains("qwen3-vl") {
+        (Some(32_768), None, Some(16_384))
+    } else if lower.contains("gpt-oss-120b") || lower.contains("llama-3_3-70b") || lower.contains("llama-3.3-70b") {
+        (Some(131_072), None, Some(131_072))
+    } else if lower.contains("gpt-oss-20b") || lower.contains("nemotron3-omni") || lower.contains("laguna-xs") {
+        (Some(131_072), None, Some(65_536))
+    } else if lower.contains("olala-v1.0-translate") {
+        (Some(8_192), None, Some(8_192))
+    } else if lower.contains("olala") || lower.contains("qwen3guard") {
+        (Some(32_768), None, Some(16_384))
     } else if lower.contains("deepseek") || lower.contains("r1") {
         (Some(64_000), None, Some(8_192))
     } else if lower.contains("whisper") {
@@ -187,6 +206,11 @@ fn infer_model_capabilities(
             || lower.contains("deepseek")
             || lower.contains("flash-free")
             || lower.contains("glm-5")
+            || lower.contains("gemma-4")
+            || lower.contains("gpt-oss-120b")
+            || lower.contains("qwen3.8")
+            || lower.contains("qwen3.6")
+            || lower.contains("qwen3.5")
         {
             Some(true)
         } else if is_gemini && lower.contains("3.8") {
@@ -215,6 +239,7 @@ fn infer_model_capabilities(
 #[derive(Debug, Default)]
 pub struct ModelCatalogCache {
     live_free: Mutex<Option<(i64, Vec<OpenAiModelEntry>)>>,
+    live_ovh: Mutex<Option<(i64, Vec<OpenAiModelEntry>)>>,
 }
 
 impl ModelCatalogCache {
@@ -492,35 +517,49 @@ impl ModelCatalogCache {
             .unwrap_or(true);
 
         if ovh_enabled {
-            for m in curated_models_for_provider(ProviderKind::Ovh) {
-                let prefixed_id = format!("ovh/{}", m.id);
-                if seen.insert(prefixed_id.clone()) {
-                    let (supported_levels, default_level) = model_level_capabilities(
-                        ProviderKind::Ovh,
-                        m.id,
-                        Some(true),
-                        None,
-                    );
-                    let (attachment, reasoning, modalities, tool_call) =
-                        infer_model_capabilities(&prefixed_id, None, None, None, None);
-                    let (limit, context_length, max_output_tokens) =
-                        infer_model_limits(&prefixed_id, None);
-                    out.push(OpenAiModelEntry {
-                        id: prefixed_id,
-                        object: "model",
-                        created: created_sec,
-                        owned_by: "ovh".to_string(),
-                        display_name: m.name.to_string(),
-                        supported_levels,
-                        default_level,
-                        attachment,
-                        reasoning,
-                        modalities,
-                        tool_call,
-                        limit,
-                        context_length,
-                        max_output_tokens,
-                    });
+            let live_ovh = if fetch_live {
+                self.get_or_fetch_live_ovh(mihomo, now).await
+            } else {
+                Vec::new()
+            };
+
+            if !live_ovh.is_empty() {
+                for m in live_ovh {
+                    if seen.insert(m.id.clone()) {
+                        out.push(m);
+                    }
+                }
+            } else {
+                for m in curated_models_for_provider(ProviderKind::Ovh) {
+                    let prefixed_id = format!("ovh/{}", m.id);
+                    if seen.insert(prefixed_id.clone()) {
+                        let (supported_levels, default_level) = model_level_capabilities(
+                            ProviderKind::Ovh,
+                            m.id,
+                            Some(true),
+                            None,
+                        );
+                        let (attachment, reasoning, modalities, tool_call) =
+                            infer_model_capabilities(&prefixed_id, None, None, None, None);
+                        let (limit, context_length, max_output_tokens) =
+                            infer_model_limits(&prefixed_id, None);
+                        out.push(OpenAiModelEntry {
+                            id: prefixed_id,
+                            object: "model",
+                            created: created_sec,
+                            owned_by: "ovh".to_string(),
+                            display_name: m.name.to_string(),
+                            supported_levels,
+                            default_level,
+                            attachment,
+                            reasoning,
+                            modalities,
+                            tool_call,
+                            limit,
+                            context_length,
+                            max_output_tokens,
+                        });
+                    }
                 }
             }
         }
@@ -722,5 +761,129 @@ impl ModelCatalogCache {
             *guard = Some((now + CACHE_TTL_MS, filtered.clone()));
         }
         filtered
+    }
+
+    async fn get_or_fetch_live_ovh(
+        &self,
+        mihomo: Option<&Arc<MihomoController>>,
+        now: i64,
+    ) -> Vec<OpenAiModelEntry> {
+        {
+            let guard = self.live_ovh.lock().unwrap();
+            if let Some((expires_at, cached)) = guard.as_ref()
+                && now < *expires_at
+            {
+                return cached.clone();
+            }
+        }
+
+        // Try via mihomo relay first, then fall back to reqwest direct
+        let mut json_opt: Option<Value> = None;
+        if let Some(ctl) = mihomo {
+            let resp = ctl
+                .relay(RelayRequest {
+                    target_url: OVH_MODELS_URL.to_string(),
+                    proxy_name: "DIRECT".to_string(),
+                    method: "GET".to_string(),
+                    fingerprint: "opencode".to_string(),
+                    timeout_ms: 8000,
+                    upstream_authorization: None,
+                    headers: vec![("Accept".into(), "application/json".into())],
+                    body: Bytes::new(),
+                })
+                .await;
+            if let Ok(r) = resp && r.status().is_success() {
+                json_opt = r.json::<Value>().await.ok();
+            }
+        }
+
+        if json_opt.is_none() {
+            if let Ok(client) = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(6000))
+                .build()
+            {
+                if let Ok(r) = client.get(OVH_MODELS_URL).send().await
+                    && r.status().is_success()
+                {
+                    json_opt = r.json::<Value>().await.ok();
+                }
+            }
+        }
+
+        let Some(json) = json_opt else {
+            return Vec::new();
+        };
+
+        let created_sec = now / 1000;
+        let mut entries = Vec::new();
+        if let Some(arr) = json.get("data").and_then(Value::as_array) {
+            for m in arr {
+                let id = m.get("id").and_then(Value::as_str).unwrap_or("").trim();
+                if id.is_empty() {
+                    continue;
+                }
+                let max_completion_tokens = m
+                    .get("max_completion_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let context_length = m
+                    .get("context_length")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let is_whisper = id.to_ascii_lowercase().contains("whisper");
+
+                // Only include chat completion models and speech-to-text models
+                if max_completion_tokens == 0 && !is_whisper {
+                    continue;
+                }
+
+                let prefixed_id = format!("ovh/{}", id);
+                let (supported_levels, default_level) = model_level_capabilities(
+                    ProviderKind::Ovh,
+                    id,
+                    Some(true),
+                    None,
+                );
+                let (attachment, reasoning, modalities, tool_call) =
+                    infer_model_capabilities(&prefixed_id, None, None, None, None);
+
+                let live_limit = if context_length > 0 || max_completion_tokens > 0 {
+                    Some(ModelLimitInfo {
+                        context: (context_length > 0).then_some(context_length),
+                        input: None,
+                        output: (max_completion_tokens > 0).then_some(max_completion_tokens),
+                    })
+                } else {
+                    None
+                };
+
+                let (limit, ctx, out) = infer_model_limits(&prefixed_id, live_limit);
+                let display_name = display_name_for_model(ProviderKind::Ovh, id);
+
+                entries.push(OpenAiModelEntry {
+                    id: prefixed_id,
+                    object: "model",
+                    created: created_sec,
+                    owned_by: "ovh".to_string(),
+                    display_name,
+                    supported_levels,
+                    default_level,
+                    attachment,
+                    reasoning,
+                    modalities,
+                    tool_call,
+                    limit,
+                    context_length: ctx,
+                    max_output_tokens: out,
+                });
+            }
+        }
+
+        if !entries.is_empty() {
+            let mut guard = self.live_ovh.lock().unwrap();
+            *guard = Some((now + CACHE_TTL_MS, entries.clone()));
+        }
+
+        entries
     }
 }
