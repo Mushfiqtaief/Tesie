@@ -19,14 +19,18 @@ export function getModelCapabilities(
   const hasVision = Boolean(
     entry?.attachment === true ||
     entryMods.includes("image") ||
-    /gemini|claude-3|claude-sonnet|claude-opus|gpt-4o|gpt-4-turbo|gpt-4.5|o1|o3|-vl|vision|internvl|qwen-vl|pixtral|llava|glm-4v/i.test(modelSlug)
+    /gemini|claude-3|claude-sonnet|claude-opus|gpt-4o|gpt-4-turbo|gpt-4.5|o1|o3|-vl|vision|internvl|qwen-vl|pixtral|llava|glm-4v|deepseek-v4\.1|glm-5\.3|mimo-v2\.[56]|mimo-v2-omni|longcat-2\.5|hy4-flash|inkling-2|super-vl|kimi-k2|qwen3|minimax-m3|step-5|crouton|exo-free|pulse-alpha|muse-spark/i.test(
+      modelSlug,
+    )
   );
 
   // Thinking / Reasoning detection: explicit reasoning flag, thinking levels, or family regex
   const hasThinking = Boolean(
     entry?.reasoning === true ||
     (entry?.supported_levels && entry.supported_levels.length > 0) ||
-    /thinking|reasoning|reasoner|r1|qwq|o1|o3|beam-free|big-pickle|skywork/i.test(modelSlug)
+    /thinking|reasoning|reasoner|r1|qwq|o1|o3|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5/i.test(
+      modelSlug,
+    )
   );
 
   // Audio detection: explicit "audio" modality or family regex

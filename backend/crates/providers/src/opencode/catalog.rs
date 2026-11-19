@@ -47,10 +47,27 @@ fn infer_model_capabilities(
     let is_gemini = lower.contains("gemini");
     let is_claude = lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus");
     let is_gpt_vis = lower.contains("gpt-4o") || lower.contains("o1") || lower.contains("o3") || lower.contains("gpt-4.5");
-    let is_vl = lower.contains("-vl") || lower.contains("vision") || lower.contains("internvl") || lower.contains("qwen-vl");
+    let is_vl = lower.contains("-vl") || lower.contains("vision") || lower.contains("internvl") || lower.contains("qwen-vl") || lower.contains("llava");
+    let is_opencode_vision = lower.contains("deepseek-v4.1")
+        || lower.contains("glm-5.3")
+        || lower.contains("mimo-v2.6")
+        || lower.contains("mimo-v2.5")
+        || lower.contains("mimo-v2-omni")
+        || lower.contains("longcat-2.5")
+        || lower.contains("hy4-flash")
+        || lower.contains("inkling-2")
+        || lower.contains("super-vl")
+        || lower.contains("kimi-k2")
+        || lower.contains("qwen3")
+        || lower.contains("minimax-m3")
+        || lower.contains("step-5")
+        || lower.contains("crouton")
+        || lower.contains("exo-free")
+        || lower.contains("pulse-alpha")
+        || lower.contains("muse-spark");
 
     let attachment = live_attachment.or_else(|| {
-        if is_gemini || is_claude || is_gpt_vis || is_vl {
+        if is_gemini || is_claude || is_gpt_vis || is_vl || is_opencode_vision {
             Some(true)
         } else {
             None
@@ -66,6 +83,9 @@ fn infer_model_capabilities(
             || lower.contains("o1")
             || lower.contains("o3")
             || lower.contains("beam")
+            || lower.contains("deepseek")
+            || lower.contains("flash-free")
+            || lower.contains("glm-5")
         {
             Some(true)
         } else if is_gemini && lower.contains("3.8") {
@@ -80,7 +100,7 @@ fn infer_model_capabilities(
         if attachment == Some(true) {
             mods.push("image".to_string());
         }
-        if is_gemini || lower.contains("audio") || lower.contains("whisper") {
+        if is_gemini || lower.contains("audio") || lower.contains("whisper") || lower.contains("mimo") || lower.contains("muse") {
             mods.push("audio".to_string());
         }
         Some(mods)
