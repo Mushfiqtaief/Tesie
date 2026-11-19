@@ -17,66 +17,12 @@ Token Saver compression, and a live React + Carbon telemetry dashboard.
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981?style=flat-square)](LICENSE)
 
 [Quick Install](#quick-install) &middot;
-[Screenshots](#interface--screenshots) &middot;
 [Features](#features) &middot;
 [Architecture](#architecture) &middot;
 [CLI Commands](#cli-commands) &middot;
 [Coding Agents](#connect-your-coding-agents) &middot;
 [Contributors](#contributors)
 
-<br />
-
-<img src="docs/assets/screenshots/dashboard.png" alt="Tesie Live Routing Topology & Telemetry Dashboard" width="950" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.4);" />
-
-</div>
-
----
-
-## Interface &amp; Screenshots
-
-Tesie includes a built-in React 19 + TypeScript + Tailwind CSS dashboard served directly on `http://127.0.0.1:20129`:
-
-### 1. Live Routing Topology &amp; Real-Time Telemetry
-Visualize active traffic flows, exit-IP rotation, healthy/cooling proxy pools (OpenCode Free, Antigravity, OVHcloud, Logflare), streaming tokens/sec, and dynamic bridge routing arcs.
-
-<div align="center">
-  <img src="docs/assets/screenshots/dashboard.png" alt="Live Routing Topology" width="850" />
-</div>
-
-<br />
-
-### 2. Multimodal Vision &amp; Audio Bridge
-Automatically adapts text-only upstream models (such as DeepSeek-R1 or Qwen) by transcribing user screenshots, photos, and voice streams using fast vision/audio providers (Gemini 3.8 Flash, Whisper, Qwen 3.6-27B) before forwarding to the target model. Includes live telemetry and in-browser testing.
-
-<div align="center">
-  <img src="docs/assets/screenshots/multimodal-bridge.png" alt="Multimodal Bridge" width="850" />
-</div>
-
-<br />
-
-### 3. Model Combos &amp; Context Limits
-Create resilient multi-model failover chains (`smart-free`, `fast-code`, etc.) with automatic capability inheritance, conservative context &amp; output token limit calculations, and real-time validation.
-
-<div align="center">
-  <img src="docs/assets/screenshots/model-combos.png" alt="Model Combos Modal" width="850" />
-</div>
-
-<br />
-
-### 4. Providers &amp; Capabilities Catalog
-Organized catalog featuring split card accents (**Half Blue** for Vision, **Half Orange** for Thinking, **Split** for Dual Support), audio tags, context/output limits, and unified account cards with real-time status ribbons (`Active · Serving Tokens`, `Cooldown`, `Banned · Auto-disabled`).
-
-<div align="center">
-  <img src="docs/assets/screenshots/providers-models.png" alt="Providers & Models Catalog" width="850" />
-</div>
-
-<br />
-
-### 5. Quota Tracker &amp; Capacity Multiplier
-Monitor hundreds of exit-IP buckets for OpenCode Free and disjoint OAuth account pools (Gemini Weekly Pool &amp; Claude/GPT Pool) with automated probe health checks and 1-click proxy pool export.
-
-<div align="center">
-  <img src="docs/assets/screenshots/quota-tracker.png" alt="Quota Tracker" width="850" />
 </div>
 
 ---
