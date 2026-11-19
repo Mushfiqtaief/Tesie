@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -1344,28 +1345,6 @@ export function ProvidersModelsView({
                   <Pencil className="h-3.5 w-3.5" />
                   Edit
                 </Button>
-                {onFetchCustomModels && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={fetchingSubpageModels}
-                    onClick={async () => {
-                      setFetchingSubpageModels(true);
-                      try {
-                        await onFetchCustomModels(activeProvider.id);
-                      } finally {
-                        setFetchingSubpageModels(false);
-                      }
-                    }}
-                  >
-                    {fetchingSubpageModels ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3.5 w-3.5" />
-                    )}
-                    Fetch /models
-                  </Button>
-                )}
                 {onRefreshCustomFavicon && (
                   <Button
                     variant="secondary"
@@ -1402,6 +1381,30 @@ export function ProvidersModelsView({
                 )}
               </>
             )}
+            {onFetchCustomModels &&
+              (isCustom || activeProvider.id === "opencode" || activeProvider.id === "ovh") && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={fetchingSubpageModels}
+                  onClick={async () => {
+                    setFetchingSubpageModels(true);
+                    try {
+                      await onFetchCustomModels(activeProvider.id);
+                    } finally {
+                      setFetchingSubpageModels(false);
+                    }
+                  }}
+                  title={`Fetch latest live model catalog for ${activeProvider.name}`}
+                >
+                  {fetchingSubpageModels ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Fetch /models
+                </Button>
+              )}
             {!isCustom && (!isAntigravity || accounts.length > 0) && (
               <Button
                 variant="secondary"
@@ -1483,31 +1486,62 @@ export function ProvidersModelsView({
             )}
           </div>
 
-          {!isCustom && (
-            <ProbeSettingsBar
-              compact
-              providerId={activeProvider.id}
-              providerName={activeProvider.name}
-              probeEnabled={activeProvider.config.probe_enabled ?? true}
-              probeIntervalSec={activeProvider.config.probe_interval_sec ?? 30}
-              onUpdateConfig={(patch) => onUpdateProviderConfig(activeProvider.id, patch)}
-              onManualProbe={
-                isAntigravity
-                  ? accounts.length > 0
-                    ? () => void handleRefreshAllAg()
-                    : undefined
-                  : () =>
-                      void (onProbeQuotasNow ? onProbeQuotasNow() : handleManualQuotaRefresh())
-              }
-              probing={isAntigravity ? refreshingAllAg : syncingQuotas || isProbingLive}
-              lastProbeAt={
-                isAntigravity
-                  ? accounts[0]?.quota?.fetched_at ?? null
-                  : quotaProbeStatus?.last_probe_at ?? lastQuotaSyncAt
-              }
-              nowMs={nowMs}
-            />
-          )}
+          <div className="flex flex-wrap items-center gap-3">
+            {!isAntigravity && (
+              <div
+                className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 text-xs"
+                title="Default reasoning effort sent to upstream when client does not specify it"
+              >
+                <Brain className="h-3.5 w-3.5 text-[var(--warning)]" />
+                <span className="font-medium text-[var(--text-muted)]">Reasoning:</span>
+                <select
+                  aria-label="Provider default reasoning effort"
+                  value={currentThinkingLevel}
+                  onChange={(e) =>
+                    void onUpdateProviderConfig(activeProvider.id, {
+                      thinking_level: e.target.value,
+                    })
+                  }
+                  className="bg-transparent font-medium text-[var(--text-primary)] outline-none cursor-pointer"
+                >
+                  <option value="auto">Auto (client default)</option>
+                  <option value="none">None (disable thinking)</option>
+                  <option value="minimal">Minimal</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">X-High</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+            )}
+
+            {!isCustom && (
+              <ProbeSettingsBar
+                compact
+                providerId={activeProvider.id}
+                providerName={activeProvider.name}
+                probeEnabled={activeProvider.config.probe_enabled ?? true}
+                probeIntervalSec={activeProvider.config.probe_interval_sec ?? 30}
+                onUpdateConfig={(patch) => onUpdateProviderConfig(activeProvider.id, patch)}
+                onManualProbe={
+                  isAntigravity
+                    ? accounts.length > 0
+                      ? () => void handleRefreshAllAg()
+                      : undefined
+                    : () =>
+                        void (onProbeQuotasNow ? onProbeQuotasNow() : handleManualQuotaRefresh())
+                }
+                probing={isAntigravity ? refreshingAllAg : syncingQuotas || isProbingLive}
+                lastProbeAt={
+                  isAntigravity
+                    ? accounts[0]?.quota?.fetched_at ?? null
+                    : quotaProbeStatus?.last_probe_at ?? lastQuotaSyncAt
+                }
+                nowMs={nowMs}
+              />
+            )}
+          </div>
         </div>
       </section>
 
@@ -2092,28 +2126,6 @@ export function ProvidersModelsView({
         title={`Available Models (${filteredModels.length})`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {!isAntigravity && !isCustom && (
-              <select
-                aria-label="OpenCode thinking level"
-                value={currentThinkingLevel}
-                onChange={(e) =>
-                  void onUpdateProviderConfig("opencode", {
-                    thinking_level: e.target.value,
-                  })
-                }
-                className={`${INPUT_CLASS} w-auto py-1.5 pr-8 text-[13px] font-medium`}
-              >
-                <option value="auto">Thinking: Auto</option>
-                <option value="none">Thinking: None</option>
-                <option value="minimal">Thinking: Minimal</option>
-                <option value="low">Thinking: Low</option>
-                <option value="medium">Thinking: Medium</option>
-                <option value="high">Thinking: High</option>
-                <option value="xhigh">Thinking: Xhigh</option>
-                <option value="max">Thinking: Max</option>
-              </select>
-            )}
-
             <div className="relative w-52 sm:w-64">
               <Search className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-[var(--text-muted)]" />
               <input

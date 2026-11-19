@@ -247,6 +247,31 @@ impl ModelCatalogCache {
         Self::default()
     }
 
+    pub async fn force_fetch_live_free(
+        &self,
+        mihomo: Option<&Arc<MihomoController>>,
+        zen_base_url: &str,
+    ) -> Vec<OpenAiModelEntry> {
+        {
+            let mut guard = self.live_free.lock().unwrap();
+            *guard = None;
+        }
+        let now = now_ms();
+        self.get_or_fetch_live_free(mihomo, zen_base_url, now).await
+    }
+
+    pub async fn force_fetch_live_ovh(
+        &self,
+        mihomo: Option<&Arc<MihomoController>>,
+    ) -> Vec<OpenAiModelEntry> {
+        {
+            let mut guard = self.live_ovh.lock().unwrap();
+            *guard = None;
+        }
+        let now = now_ms();
+        self.get_or_fetch_live_ovh(mihomo, now).await
+    }
+
     pub async fn list_models(
         &self,
         store: &Store,

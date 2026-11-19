@@ -699,11 +699,19 @@ export function App() {
 
   async function handleFetchCustomModels(id: string) {
     try {
-      const res = await api.fetchCustomProviderModels(id, true);
-      notify(
-        `Synced ${res.models.length} model(s) from ${res.custom_provider.name}`,
-      );
-      await loadAll({ silent: true });
+      if (id === "opencode" || id === "ovh") {
+        const res = await api.fetchProviderModels(id);
+        notify(
+          `Synced ${res.count ?? 0} live model(s) from ${res.name || id}`,
+        );
+        await loadAll({ silent: true });
+      } else {
+        const res = await api.fetchCustomProviderModels(id, true);
+        notify(
+          `Synced ${res.models.length} model(s) from ${res.custom_provider.name}`,
+        );
+        await loadAll({ silent: true });
+      }
     } catch (err) {
       notify(err instanceof Error ? err.message : "Failed to fetch upstream /models", true);
     }

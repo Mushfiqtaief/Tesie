@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
-  ChevronDown,
+  Code2,
   Copy,
   FileCode2,
   KeyRound,
   Plus,
   RotateCcw,
+  Search,
   Sparkles,
   Terminal,
   X,
@@ -30,6 +31,8 @@ import type {
   CreatedApiKeyResponse,
   OpenAiModelEntry,
 } from "../types";
+
+type ToolTab = "opencode" | "claude" | "codex" | "ides";
 
 export function CliToolsView({
   cliStatus,
@@ -62,7 +65,7 @@ export function CliToolsView({
     typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:20129";
   const defaultBaseV1 = `${origin}/v1`;
 
-  const [expandedTool, setExpandedTool] = useState<string>("opencode");
+  const [activeTab, setActiveTab] = useState<ToolTab>("opencode");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [previewModal, setPreviewModal] = useState<{
     title: string;
@@ -96,19 +99,31 @@ export function CliToolsView({
   const [cxBusy, setCxBusy] = useState(false);
 
   // Build unified model options (Combos first, then provider models)
-  const comboNames = combos.filter((c) => c.enabled).map((c) => c.name);
-  const catalogSpecs = Array.from(
-    new Set(
-      models
-        .filter((m) => m.owned_by !== "combo")
-        .map((m) => {
-          if (m.id.includes("/")) return m.id;
-          if (m.owned_by === "antigravity") return `ag/${m.id}`;
-          return `oc/${m.id}`;
-        }),
-    ),
+  const comboNames = useMemo(
+    () => combos.filter((c) => c.enabled).map((c) => c.name),
+    [combos],
   );
-  const allSelectableModels = [...comboNames, ...catalogSpecs];
+
+  const catalogSpecs = useMemo(() => {
+    return Array.from(
+      new Set(
+        models
+          .filter((m) => m.owned_by !== "combo")
+          .map((m) => {
+            if (m.id.includes("/")) return m.id;
+            if (m.owned_by === "antigravity") return `ag/${m.id}`;
+            if (m.owned_by === "ovh") return `ovh/${m.id}`;
+            return `oc/${m.id}`;
+          }),
+      ),
+    );
+  }, [models]);
+
+  const allSelectableModels = useMemo(
+    () => [...comboNames, ...catalogSpecs],
+    [comboNames, catalogSpecs],
+  );
+
   const fallbackPrimary = comboNames[0] || catalogSpecs[0] || "oc/deepseek-v4.1-flash-free";
 
   // Hydrate API key default
@@ -275,35 +290,199 @@ default_subagent_model = "${sub}"`;
   );
 
   return (
-    <div className="space-y-4">
-      {/* Compact Shared Endpoint & API Key Bar */}
+    <div className="space-y-5">
+      {/* 1. Header Overview Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold tracking-tight text-[var(--text-primary)]">
+              CLI &amp; IDE Developer Hub
+            </h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--success-soft)] bg-[var(--success-soft)]/40 px-2.5 py-0.5 text-[11px] font-medium text-[var(--success)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)] animate-pulse" />
+              Gateway Active
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+            One-click local configuration for OpenCode, Claude Code, OpenAI Codex, and IDE extensions routing through Tesie.
+          </p>
+        </div>
+
+        {/* Quick Config Count */}
+        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+          <span className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 font-mono">
+            {baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}
+          </span>
+          <button
+            type="button"
+            onClick={() => copyText("header-url", baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`)}
+            className="flex items-center gap-1 text-[var(--accent)] hover:underline"
+            title="Copy API Base URL"
+          >
+            {copiedId === "header-url" ? (
+              <Check className="h-3.5 w-3.5 text-[var(--success)]" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            <span>{copiedId === "header-url" ? "Copied" : "Copy"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Top Interactive Tool Switcher Strip (Status Cards) */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/* OpenCode Card */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("opencode")}
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+            activeTab === "opencode"
+              ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
+              : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <ProviderIcon src="/providers/opencode.png" name="OpenCode" color="#E56A4A" size={26} />
+              <span className="text-xs font-semibold text-[var(--text-primary)]">OpenCode CLI</span>
+            </div>
+            {ocStatus?.configured ? (
+              <StatusPill tone="success" dot>Connected</StatusPill>
+            ) : (
+              <StatusPill tone="neutral">Ready</StatusPill>
+            )}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+            <span className="truncate font-mono">
+              {ocStatus?.active_model ? `tesie/${ocStatus.active_model}` : "Not configured"}
+            </span>
+            <span className="font-mono text-[10px] opacity-75">~/.config/opencode</span>
+          </div>
+        </button>
+
+        {/* Claude Code Card */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("claude")}
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+            activeTab === "claude"
+              ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
+              : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <ProviderIcon src="/providers/claude.png" name="Claude Code" color="#D97757" size={26} />
+              <span className="text-xs font-semibold text-[var(--text-primary)]">Claude Code</span>
+            </div>
+            {clStatus?.configured ? (
+              <StatusPill tone="success" dot>Connected</StatusPill>
+            ) : (
+              <StatusPill tone="neutral">Ready</StatusPill>
+            )}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+            <span className="truncate font-mono">
+              {clStatus?.sonnet_model || clStatus?.default_model || "Native Anthropic"}
+            </span>
+            <span className="font-mono text-[10px] opacity-75">~/.claude/settings</span>
+          </div>
+        </button>
+
+        {/* Codex Card */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("codex")}
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+            activeTab === "codex"
+              ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
+              : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <ProviderIcon src="/providers/codex.png" name="Codex CLI" color="#10A37F" size={26} />
+              <span className="text-xs font-semibold text-[var(--text-primary)]">OpenAI Codex</span>
+            </div>
+            {cxStatus?.configured ? (
+              <StatusPill tone="success" dot>Connected</StatusPill>
+            ) : (
+              <StatusPill tone="neutral">Ready</StatusPill>
+            )}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+            <span className="truncate font-mono">
+              {cxStatus?.active_model || "TOML config"}
+            </span>
+            <span className="font-mono text-[10px] opacity-75">~/.codex/config.toml</span>
+          </div>
+        </button>
+
+        {/* IDE Extensions Card */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("ides")}
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+            activeTab === "ides"
+              ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
+              : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-[26px] w-[26px] items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+                <Code2 className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-semibold text-[var(--text-primary)]">IDE Extensions</span>
+            </div>
+            <span className="text-[10px] font-medium text-[var(--text-muted)]">OpenAI Wire</span>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+            <span className="truncate">Cursor · Cline · Roo</span>
+            <span className="font-mono text-[10px] text-[var(--accent)]">Universal</span>
+          </div>
+        </button>
+      </div>
+
+      {/* 3. Gateway Configuration Toolbar */}
       <div className="grid grid-cols-1 gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3 md:grid-cols-12">
         <div className="md:col-span-6">
           <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">
-            Gateway endpoint URL
+            Gateway Endpoint URL (Base V1)
           </label>
-          <input
-            type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            className={`${INPUT_CLASS} py-1 font-mono`}
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              className={`${INPUT_CLASS} py-1.5 font-mono text-xs`}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => copyText("bar-base-url", baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`)}
+              title="Copy endpoint"
+            >
+              {copiedId === "bar-base-url" ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
+              {copiedId === "bar-base-url" ? "Copied" : "Copy"}
+            </Button>
+          </div>
         </div>
 
         <div className="md:col-span-6">
           <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">
-            Client API key
+            Client Authentication Key
           </label>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <select
               value={selectedApiKey}
               onChange={(e) => setSelectedApiKey(e.target.value)}
-              className={`${INPUT_CLASS} flex-1 py-1 font-mono`}
+              className={`${INPUT_CLASS} flex-1 py-1.5 font-mono text-xs`}
             >
               <option value="">
                 {keys.some((k) => k.enabled)
-                  ? "Select or generate a key..."
-                  : "sk-tesie-local (open local access)"}
+                  ? "Select key (or leave empty for sk-tesie-local)..."
+                  : "sk-tesie-local (open local loopback)"}
               </option>
               {keys
                 .filter((k) => k.enabled && k.raw_key)
@@ -318,547 +497,628 @@ default_subagent_model = "${sub}"`;
               size="sm"
               onClick={() => void handleQuickMintKey()}
               disabled={creatingKey}
-              title="Create a dedicated API key for CLI tools"
+              title="Generate a dedicated API key for CLI tools"
             >
               <KeyRound className="h-3.5 w-3.5" />
-              {creatingKey ? "..." : "New key"}
+              {creatingKey ? "Minting..." : "Mint Key"}
             </Button>
           </div>
         </div>
       </div>
 
-      {/* Auto-Configurable CLI Assistants */}
-      <div className="overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] divide-y divide-[var(--border-subtle)]">
-        {/* 1. OPENCODE CLI */}
-        <div>
-          <button
-            type="button"
-            onClick={() => setExpandedTool((cur) => (cur === "opencode" ? "" : "opencode"))}
-            className="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition-colors hover:bg-[var(--bg-hover)]/45"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <ProviderIcon
-                src="/providers/opencode.png"
-                name="OpenCode"
-                color="#E56A4A"
-                size={34}
-              />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    OpenCode CLI
-                  </span>
-                  {ocStatus?.configured ? (
-                    <StatusPill tone="success" dot>
-                      Connected
-                    </StatusPill>
-                  ) : ocStatus?.installed ? (
-                    <StatusPill tone="warning">Not configured</StatusPill>
-                  ) : (
-                    <StatusPill tone="neutral">Ready</StatusPill>
-                  )}
-                  {ocStatus?.active_model && (
-                    <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                      tesie/{ocStatus.active_model}
-                    </span>
-                  )}
+      {/* 4. Active Tool Workspace */}
+      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 sm:p-6 shadow-xs">
+        {/* ========================================================================= */}
+        {/* TAB 1: OPENCODE CLI */}
+        {/* ========================================================================= */}
+        {activeTab === "opencode" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
+              <div className="flex items-center gap-3">
+                <ProviderIcon src="/providers/opencode.png" name="OpenCode" color="#E56A4A" size={32} />
+                <div>
+                  <h2 className="text-sm font-bold text-[var(--text-primary)]">OpenCode CLI Configuration</h2>
+                  <p className="font-mono text-[11px] text-[var(--text-muted)]">
+                    Target: {ocStatus?.config_path || "~/.config/opencode/opencode.json"}
+                  </p>
                 </div>
-                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">
-                  {ocStatus?.config_path || "~/.config/opencode/opencode.json"}
+              </div>
+
+              {/* Terminal Snippet Box */}
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 font-mono text-xs">
+                <span className="text-[var(--text-muted)]">$</span>
+                <span className="font-semibold text-[var(--text-primary)]">opencode</span>
+                <button
+                  type="button"
+                  onClick={() => copyText("run-opencode", "opencode")}
+                  className="ml-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  title="Copy terminal command"
+                >
+                  {copiedId === "run-opencode" ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Model Config Grid */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Primary Interactive Model (`model`)
+                </label>
+                <select
+                  value={ocActiveModel}
+                  onChange={(e) => setOcActiveModel(e.target.value)}
+                  className={`${INPUT_CLASS} font-mono text-xs`}
+                >
+                  {(ocModels.length > 0 ? ocModels : allSelectableModels).map((m) => (
+                    <option key={m} value={m}>
+                      tesie/{m} {comboNames.includes(m) ? "★ [Combo]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Main model loaded when invoking `opencode`.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Explorer Subagent Model (`agent.explorer.model`)
+                </label>
+                <select
+                  value={ocSubagentModel}
+                  onChange={(e) => setOcSubagentModel(e.target.value)}
+                  className={`${INPUT_CLASS} font-mono text-xs`}
+                >
+                  {(ocModels.length > 0 ? ocModels : allSelectableModels).map((m) => (
+                    <option key={m} value={m}>
+                      tesie/{m} {comboNames.includes(m) ? "★ [Combo]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Subagent model used for background codebase exploration and reviews.
                 </p>
               </div>
             </div>
 
-            <ChevronDown
-              className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform ${
-                expandedTool === "opencode" ? "rotate-180" : ""
-              }`}
-            />
-          </button>
+            {/* Registered Models Chip Selector */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-[var(--text-secondary)]">
+                    Registered Models &amp; Combos ({ocModels.length} selected)
+                  </span>
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    Visible inside OpenCode model switcher (`/model`)
+                  </span>
+                </div>
 
-          {expandedTool === "opencode" && (
-            <div className="space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-canvas)]/35 p-5">
-              {/* Model Selection Chips */}
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="text-xs font-medium text-[var(--text-secondary)]">
-                    Models & combos registered in OpenCode ({ocModels.length} selected)
-                  </label>
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="relative w-44">
+                    <Search className="pointer-events-none absolute top-2 left-2.5 h-3.5 w-3.5 text-[var(--text-muted)]" />
                     <input
                       type="text"
-                      placeholder="Filter models..."
+                      placeholder="Filter catalog..."
                       value={ocFilter}
                       onChange={(e) => setOcFilter(e.target.value)}
-                      className={`${INPUT_CLASS} w-44 py-1`}
+                      className={`${INPUT_CLASS} py-1 pl-8 text-xs`}
                     />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        const top = allSelectableModels.slice(0, 6);
-                        setOcModels(top);
-                        if (!ocActiveModel && top[0]) setOcActiveModel(top[0]);
-                      }}
-                    >
-                      <Sparkles className="h-3 w-3 text-[var(--accent)]" />
-                      Select top 6
-                    </Button>
                   </div>
-                </div>
-
-                <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3">
-                  {filteredOcCatalog.map((m) => {
-                    const checked = ocModels.includes(m);
-                    const isCombo = comboNames.includes(m);
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => toggleOcModel(m)}
-                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[11px] transition-colors ${
-                          checked
-                            ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
-                            : "border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                        }`}
-                      >
-                        {checked ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-                        {isCombo ? `[combo] ${m}` : m}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Active Model & Subagent Model */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    Default active model (`model` in opencode.json)
-                  </label>
-                  <select
-                    value={ocActiveModel}
-                    onChange={(e) => setOcActiveModel(e.target.value)}
-                    className={`${INPUT_CLASS} font-mono`}
-                  >
-                    {(ocModels.length > 0 ? ocModels : allSelectableModels).map((m) => (
-                      <option key={m} value={m}>
-                        tesie/{m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    Explorer subagent model (`agent.explorer.model`)
-                  </label>
-                  <select
-                    value={ocSubagentModel}
-                    onChange={(e) => setOcSubagentModel(e.target.value)}
-                    className={`${INPUT_CLASS} font-mono`}
-                  >
-                    {(ocModels.length > 0 ? ocModels : allSelectableModels).map((m) => (
-                      <option key={m} value={m}>
-                        tesie/{m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-3">
-                <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {ocStatus?.config_path || "~/.config/opencode/opencode.json"}
-                </span>
-
-                <div className="flex flex-wrap items-center gap-2">
                   <Button
-                    variant="secondary"
+                    variant="ghost"
                     size="sm"
-                    onClick={() =>
-                      setPreviewModal({
-                        title: "OpenCode manual configuration",
-                        path: "~/.config/opencode/opencode.json",
-                        content: buildOpenCodePreview(),
-                      })
-                    }
+                    onClick={() => {
+                      const top = allSelectableModels.slice(0, 6);
+                      setOcModels(top);
+                      if (!ocActiveModel && top[0]) setOcActiveModel(top[0]);
+                    }}
                   >
-                    <FileCode2 className="h-3.5 w-3.5" />
-                    Preview JSON
+                    <Sparkles className="h-3 w-3 text-[var(--accent)]" />
+                    Top 6
                   </Button>
-                  {ocStatus?.configured && (
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={ocBusy}
-                      onClick={async () => {
-                        setOcBusy(true);
-                        try {
-                          await onResetOpenCode();
-                        } finally {
-                          setOcBusy(false);
-                        }
-                      }}
+                </div>
+              </div>
+
+              {/* Tag Cloud */}
+              <div className="flex max-h-48 flex-wrap gap-1.5 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 p-3">
+                {filteredOcCatalog.map((m) => {
+                  const checked = ocModels.includes(m);
+                  const isCombo = comboNames.includes(m);
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => toggleOcModel(m)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs transition-colors ${
+                        checked
+                          ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
+                          : "border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                      }`}
                     >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Reset
-                    </Button>
-                  )}
+                      {checked ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                      {isCombo ? `★ [combo] ${m}` : m}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Action Bar & Preview */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-4">
+              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                <FileCode2 className="h-4 w-4" />
+                <span>Writes clean schema-compliant configuration directly to disk.</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    setPreviewModal({
+                      title: "OpenCode JSON Preview",
+                      path: ocStatus?.config_path || "~/.config/opencode/opencode.json",
+                      content: buildOpenCodePreview(),
+                    })
+                  }
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  Preview JSON
+                </Button>
+
+                {ocStatus?.configured && (
                   <Button
-                    variant="primary"
+                    variant="danger"
                     size="sm"
-                    disabled={ocBusy || ocModels.length === 0}
+                    disabled={ocBusy}
                     onClick={async () => {
                       setOcBusy(true);
                       try {
-                        await onApplyOpenCode({
-                          base_url: baseUrl,
-                          api_key: selectedApiKey || undefined,
-                          models: ocModels,
-                          active_model: ocActiveModel || ocModels[0],
-                          subagent_model: ocSubagentModel || ocActiveModel || ocModels[0],
-                        });
+                        await onResetOpenCode();
                       } finally {
                         setOcBusy(false);
                       }
                     }}
                   >
-                    <Terminal className="h-3.5 w-3.5" />
-                    {ocBusy ? "Applying..." : "Apply to OpenCode"}
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
                   </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+                )}
 
-        {/* 2. CLAUDE CODE CLI */}
-        <div>
-          <button
-            type="button"
-            onClick={() => setExpandedTool((cur) => (cur === "claude" ? "" : "claude"))}
-            className="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition-colors hover:bg-[var(--bg-hover)]/45"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <ProviderIcon
-                src="/providers/claude.png"
-                name="Claude Code"
-                color="#D97757"
-                size={34}
-              />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    Claude Code CLI
-                  </span>
-                  {clStatus?.configured ? (
-                    <StatusPill tone="success" dot>
-                      Connected
-                    </StatusPill>
-                  ) : clStatus?.installed ? (
-                    <StatusPill tone="warning">Not configured</StatusPill>
-                  ) : (
-                    <StatusPill tone="neutral">Ready</StatusPill>
-                  )}
-                  {clStatus?.sonnet_model && (
-                    <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                      {clStatus.sonnet_model}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">
-                  {clStatus?.config_path || "~/.claude/settings.json"}
-                </p>
-              </div>
-            </div>
-
-            <ChevronDown
-              className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform ${
-                expandedTool === "claude" ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-          {expandedTool === "claude" && (
-            <div className="space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-canvas)]/35 p-5">
-              <datalist id="cli-all-models-list">
-                {allSelectableModels.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {[
-                  { label: "Default model (ANTHROPIC_MODEL)", val: clDefault, set: setClDefault },
-                  {
-                    label: "Opus tier (DEFAULT_OPUS_MODEL)",
-                    val: clOpus,
-                    set: setClOpus,
-                  },
-                  {
-                    label: "Sonnet tier (DEFAULT_SONNET_MODEL)",
-                    val: clSonnet,
-                    set: setClSonnet,
-                  },
-                  {
-                    label: "Haiku tier (DEFAULT_HAIKU_MODEL)",
-                    val: clHaiku,
-                    set: setClHaiku,
-                  },
-                  {
-                    label: "Subagent model (SUBAGENT_MODEL)",
-                    val: clSubagent,
-                    set: setClSubagent,
-                  },
-                ].map((slot) => (
-                  <div key={slot.label}>
-                    <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                      {slot.label}
-                    </label>
-                    <input
-                      list="cli-all-models-list"
-                      value={slot.val}
-                      onChange={(e) => slot.set(e.target.value)}
-                      placeholder={fallbackPrimary}
-                      className={`${INPUT_CLASS} font-mono`}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-3">
-                <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {clStatus?.config_path || "~/.claude/settings.json"}
-                </span>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() =>
-                      setPreviewModal({
-                        title: "Claude Code settings.json",
-                        path: "~/.claude/settings.json",
-                        content: buildClaudePreview(),
-                      })
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={ocBusy || ocModels.length === 0}
+                  onClick={async () => {
+                    setOcBusy(true);
+                    try {
+                      await onApplyOpenCode({
+                        base_url: baseUrl,
+                        api_key: selectedApiKey || undefined,
+                        models: ocModels,
+                        active_model: ocActiveModel || ocModels[0],
+                        subagent_model: ocSubagentModel || ocActiveModel || ocModels[0],
+                      });
+                    } finally {
+                      setOcBusy(false);
                     }
-                  >
-                    <FileCode2 className="h-3.5 w-3.5" />
-                    Preview JSON
-                  </Button>
-                  {clStatus?.configured && (
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={clBusy}
-                      onClick={async () => {
-                        setClBusy(true);
-                        try {
-                          await onResetClaude();
-                        } finally {
-                          setClBusy(false);
-                        }
-                      }}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Reset
-                    </Button>
-                  )}
+                  }}
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  {ocBusy ? "Applying..." : "Apply to OpenCode"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 2: CLAUDE CODE CLI */}
+        {/* ========================================================================= */}
+        {activeTab === "claude" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
+              <div className="flex items-center gap-3">
+                <ProviderIcon src="/providers/claude.png" name="Claude Code" color="#D97757" size={32} />
+                <div>
+                  <h2 className="text-sm font-bold text-[var(--text-primary)]">Claude Code CLI Configuration</h2>
+                  <p className="font-mono text-[11px] text-[var(--text-muted)]">
+                    Target: {clStatus?.config_path || "~/.claude/settings.json"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Terminal Snippet Box */}
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 font-mono text-xs">
+                <span className="text-[var(--text-muted)]">$</span>
+                <span className="font-semibold text-[var(--text-primary)]">claude</span>
+                <button
+                  type="button"
+                  onClick={() => copyText("run-claude", "claude")}
+                  className="ml-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  title="Copy terminal command"
+                >
+                  {copiedId === "run-claude" ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            <datalist id="cli-all-models-list">
+              {allSelectableModels.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+
+            {/* Model Inputs Grid */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                {
+                  label: "Primary Model (ANTHROPIC_MODEL)",
+                  hint: "Default model used for all standard coding turns",
+                  val: clDefault,
+                  set: setClDefault,
+                },
+                {
+                  label: "Sonnet Tier (DEFAULT_SONNET_MODEL)",
+                  hint: "Model invoked during sonnet level queries",
+                  val: clSonnet,
+                  set: setClSonnet,
+                },
+                {
+                  label: "Subagent Model (SUBAGENT_MODEL)",
+                  hint: "Model invoked for background researcher subagents",
+                  val: clSubagent,
+                  set: setClSubagent,
+                },
+                {
+                  label: "Opus Tier (DEFAULT_OPUS_MODEL)",
+                  hint: "Heavy reasoning model for architect queries",
+                  val: clOpus,
+                  set: setClOpus,
+                },
+                {
+                  label: "Haiku Tier (DEFAULT_HAIKU_MODEL)",
+                  hint: "Fast light model for summaries and linting",
+                  val: clHaiku,
+                  set: setClHaiku,
+                },
+              ].map((slot) => (
+                <div key={slot.label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3.5">
+                  <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                    {slot.label}
+                  </label>
+                  <input
+                    list="cli-all-models-list"
+                    value={slot.val}
+                    onChange={(e) => slot.set(e.target.value)}
+                    placeholder={fallbackPrimary}
+                    className={`${INPUT_CLASS} font-mono text-xs`}
+                  />
+                  <p className="mt-1.5 text-[11px] text-[var(--text-muted)]">
+                    {slot.hint}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Action Bar & Preview */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-4">
+              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                <FileCode2 className="h-4 w-4" />
+                <span>Injects ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN transparently into settings.json.</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    setPreviewModal({
+                      title: "Claude Code settings.json",
+                      path: clStatus?.config_path || "~/.claude/settings.json",
+                      content: buildClaudePreview(),
+                    })
+                  }
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  Preview JSON
+                </Button>
+
+                {clStatus?.configured && (
                   <Button
-                    variant="primary"
+                    variant="danger"
                     size="sm"
                     disabled={clBusy}
                     onClick={async () => {
                       setClBusy(true);
                       try {
-                        await onApplyClaude({
-                          base_url: baseUrl,
-                          api_key: selectedApiKey || undefined,
-                          default_model: clDefault,
-                          opus_model: clOpus,
-                          sonnet_model: clSonnet,
-                          haiku_model: clHaiku,
-                          subagent_model: clSubagent,
-                        });
+                        await onResetClaude();
                       } finally {
                         setClBusy(false);
                       }
                     }}
                   >
-                    <Terminal className="h-3.5 w-3.5" />
-                    {clBusy ? "Applying..." : "Apply to Claude Code"}
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
                   </Button>
-                </div>
+                )}
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={clBusy}
+                  onClick={async () => {
+                    setClBusy(true);
+                    try {
+                      await onApplyClaude({
+                        base_url: baseUrl,
+                        api_key: selectedApiKey || undefined,
+                        default_model: clDefault,
+                        opus_model: clOpus,
+                        sonnet_model: clSonnet,
+                        haiku_model: clHaiku,
+                        subagent_model: clSubagent,
+                      });
+                    } finally {
+                      setClBusy(false);
+                    }
+                  }}
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  {clBusy ? "Applying..." : "Apply to Claude Code"}
+                </Button>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* 3. OPENAI CODEX CLI */}
-        <div>
-          <button
-            type="button"
-            onClick={() => setExpandedTool((cur) => (cur === "codex" ? "" : "codex"))}
-            className="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition-colors hover:bg-[var(--bg-hover)]/45"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <ProviderIcon
-                src="/providers/codex.png"
-                name="Codex CLI"
-                color="#10A37F"
-                size={34}
-              />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    OpenAI Codex CLI
-                  </span>
-                  {cxStatus?.configured ? (
-                    <StatusPill tone="success" dot>
-                      Connected
-                    </StatusPill>
-                  ) : cxStatus?.installed ? (
-                    <StatusPill tone="warning">Not configured</StatusPill>
-                  ) : (
-                    <StatusPill tone="neutral">Ready</StatusPill>
-                  )}
+        {/* ========================================================================= */}
+        {/* TAB 3: OPENAI CODEX CLI */}
+        {/* ========================================================================= */}
+        {activeTab === "codex" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
+              <div className="flex items-center gap-3">
+                <ProviderIcon src="/providers/codex.png" name="Codex CLI" color="#10A37F" size={32} />
+                <div>
+                  <h2 className="text-sm font-bold text-[var(--text-primary)]">OpenAI Codex CLI Configuration</h2>
+                  <p className="font-mono text-[11px] text-[var(--text-muted)]">
+                    Target: {cxStatus?.config_path || "~/.codex/config.toml"}
+                  </p>
                 </div>
-                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">
-                  {cxStatus?.config_path || "~/.codex/config.toml"}
+              </div>
+
+              {/* Terminal Snippet Box */}
+              <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 font-mono text-xs">
+                <span className="text-[var(--text-muted)]">$</span>
+                <span className="font-semibold text-[var(--text-primary)]">codex</span>
+                <button
+                  type="button"
+                  onClick={() => copyText("run-codex", "codex")}
+                  className="ml-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  title="Copy terminal command"
+                >
+                  {copiedId === "run-codex" ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Model Config Grid */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Primary Codex Model (`model`)
+                </label>
+                <select
+                  value={cxModel}
+                  onChange={(e) => setCxModel(e.target.value)}
+                  className={`${INPUT_CLASS} font-mono text-xs`}
+                >
+                  {allSelectableModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m} {comboNames.includes(m) ? "★ [Combo]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Primary model invoked for coding instructions and code generation.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Default Subagent Model (`default_subagent_model`)
+                </label>
+                <select
+                  value={cxSubagent}
+                  onChange={(e) => setCxSubagent(e.target.value)}
+                  className={`${INPUT_CLASS} font-mono text-xs`}
+                >
+                  {allSelectableModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m} {comboNames.includes(m) ? "★ [Combo]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Subagent model used for secondary code analysis and test execution.
                 </p>
               </div>
             </div>
 
-            <ChevronDown
-              className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform ${
-                expandedTool === "codex" ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-          {expandedTool === "codex" && (
-            <div className="space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-canvas)]/35 p-5">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    Primary Codex model
-                  </label>
-                  <select
-                    value={cxModel}
-                    onChange={(e) => setCxModel(e.target.value)}
-                    className={`${INPUT_CLASS} font-mono`}
-                  >
-                    {allSelectableModels.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    Default subagent model
-                  </label>
-                  <select
-                    value={cxSubagent}
-                    onChange={(e) => setCxSubagent(e.target.value)}
-                    className={`${INPUT_CLASS} font-mono`}
-                  >
-                    {allSelectableModels.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            {/* Action Bar & Preview */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-4">
+              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                <FileCode2 className="h-4 w-4" />
+                <span>Writes clean TOML configuration directly to ~/.codex/config.toml.</span>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-3">
-                <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {cxStatus?.config_path || "~/.codex/config.toml"}
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    setPreviewModal({
+                      title: "Codex config.toml",
+                      path: cxStatus?.config_path || "~/.codex/config.toml",
+                      content: buildCodexPreview(),
+                    })
+                  }
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  Preview TOML
+                </Button>
 
-                <div className="flex flex-wrap items-center gap-2">
+                {cxStatus?.configured && (
                   <Button
-                    variant="secondary"
+                    variant="danger"
                     size="sm"
-                    onClick={() =>
-                      setPreviewModal({
-                        title: "Codex config.toml",
-                        path: "~/.codex/config.toml",
-                        content: buildCodexPreview(),
-                      })
-                    }
-                  >
-                    <FileCode2 className="h-3.5 w-3.5" />
-                    Preview TOML
-                  </Button>
-                  {cxStatus?.configured && (
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={cxBusy}
-                      onClick={async () => {
-                        setCxBusy(true);
-                        try {
-                          await onResetCodex();
-                        } finally {
-                          setCxBusy(false);
-                        }
-                      }}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Reset
-                    </Button>
-                  )}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={cxBusy || !cxModel}
+                    disabled={cxBusy}
                     onClick={async () => {
                       setCxBusy(true);
                       try {
-                        await onApplyCodex({
-                          base_url: baseUrl,
-                          api_key: selectedApiKey || undefined,
-                          model: cxModel,
-                          subagent_model: cxSubagent || cxModel,
-                        });
+                        await onResetCodex();
                       } finally {
                         setCxBusy(false);
                       }
                     }}
                   >
-                    <Terminal className="h-3.5 w-3.5" />
-                    {cxBusy ? "Applying..." : "Apply to Codex"}
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
                   </Button>
+                )}
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={cxBusy || !cxModel}
+                  onClick={async () => {
+                    setCxBusy(true);
+                    try {
+                      await onApplyCodex({
+                        base_url: baseUrl,
+                        api_key: selectedApiKey || undefined,
+                        model: cxModel,
+                        subagent_model: cxSubagent || cxModel,
+                      });
+                    } finally {
+                      setCxBusy(false);
+                    }
+                  }}
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  {cxBusy ? "Applying..." : "Apply to Codex"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 4: IDE EXTENSIONS (CURSOR, CLINE, ROO CODE) */}
+        {/* ========================================================================= */}
+        {activeTab === "ides" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+                  <Code2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-[var(--text-primary)]">Universal IDE Extensions Setup</h2>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    Use any OpenAI-compatible IDE extension with Tesie (Cursor, Cline, Roo Code, Windsurf, Continue).
+                  </p>
                 </div>
               </div>
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* Compact OpenAI-Compatible IDE Quick Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3 text-xs">
-        <div className="flex flex-wrap items-center gap-2 text-[var(--text-muted)]">
-          <span className="font-medium text-[var(--text-primary)]">IDE Extensions</span>
-          <span>&middot;</span>
-          <span>Cursor, Cline &amp; Roo Code (OpenAI-Compatible)</span>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
-          <span>{baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}</span>
-          <button
-            type="button"
-            onClick={() =>
-              copyText("ide-base-url", baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`)
-            }
-            className="font-sans font-medium text-[var(--accent)] hover:underline"
-          >
-            {copiedId === "ide-base-url" ? "Copied" : "Copy URL"}
-          </button>
-        </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {/* Cursor Card */}
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[var(--text-primary)]">Cursor AI Editor</span>
+                  <span className="rounded bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
+                    OpenAI API
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  Go to <strong>Cursor Settings &gt; Models &gt; OpenAI API Key</strong>:
+                </p>
+                <div className="space-y-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-xs font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">Base URL:</span>
+                    <button
+                      type="button"
+                      onClick={() => copyText("cursor-base", baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`)}
+                      className="text-[var(--accent)] hover:underline flex items-center gap-1"
+                    >
+                      <span>{baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}</span>
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">API Key:</span>
+                    <button
+                      type="button"
+                      onClick={() => copyText("cursor-key", effectiveKey)}
+                      className="text-[var(--accent)] hover:underline flex items-center gap-1"
+                    >
+                      <span>{effectiveKey.slice(0, 14)}...</span>
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">Model ID:</span>
+                    <span className="text-[var(--text-primary)]">{fallbackPrimary}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cline & Roo Code Card */}
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[var(--text-primary)]">Cline &amp; Roo Code</span>
+                  <span className="rounded bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
+                    VS Code Extension
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  Set API Provider to <strong>OpenAI-Compatible</strong> in extension settings:
+                </p>
+                <div className="space-y-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-xs font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">Base URL:</span>
+                    <button
+                      type="button"
+                      onClick={() => copyText("cline-base", baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`)}
+                      className="text-[var(--accent)] hover:underline flex items-center gap-1"
+                    >
+                      <span>{baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}</span>
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">API Key:</span>
+                    <button
+                      type="button"
+                      onClick={() => copyText("cline-key", effectiveKey)}
+                      className="text-[var(--accent)] hover:underline flex items-center gap-1"
+                    >
+                      <span>{effectiveKey.slice(0, 14)}...</span>
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">Model ID:</span>
+                    <span className="text-[var(--text-primary)]">{fallbackPrimary}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Config Preview Modal */}

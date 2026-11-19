@@ -58,6 +58,7 @@ pub fn admin_router(state: AdminState) -> Router {
             put(update_provider_config).patch(update_provider_config),
         )
         .route("/providers/{id}/test", post(test_provider))
+        .route("/providers/{id}/fetch-models", post(fetch_provider_models_handler))
         .route(
             "/custom-providers",
             get(list_custom_providers).post(create_custom_provider),
@@ -2220,6 +2221,92 @@ async fn test_provider(
             "latency_ms": latency,
             "message": e.to_string()
         }))),
+    }
+}
+
+async fn fetch_provider_models_handler(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Json<Value>, Response> {
+    match id.as_str() {
+        "opencode" => {
+            let live = state
+                .catalog
+                .force_fetch_live_free(Some(&state.mihomo), &state.zen_base_url)
+                .await;
+            let count = live.len();
+            Ok(Json(json!({
+                "status": "ok",
+                "provider": "opencode",
+                "name": "OpenCode",
+                "count": count,
+                "models": live,
+            })))
+        }
+        "ovh" => {
+            let live = state
+                .catalog
+                .force_fetch_live_ovh(Some(&state.mihomo))
+                .await;
+            let count = live.len();
+            Ok(Json(json!({
+                "status": "ok",
+                "provider": "ovh",
+                "name": "OVHcloud AI Endpoints",
+                "count": count,
+                "models": live,
+            })))
+        }
+        other => {
+            let cp = state
+                .store
+                .custom_providers()
+                .get(other)
+                .await
+                .map_err(err_resp)?;
+            if let Some(cp) = cp {
+                let cfg = state
+                    .store
+                    .provider_configs()
+                    .get_or_default(other)
+                    .await
+                    .map_err(err_resp)?;
+                let fetched = fetch_custom_provider_models(&cp, &state.mihomo, &cfg, &state.store)
+                    .await
+                    .map_err(err_resp)?;
+                let mut merged = cp.models.clone();
+                let mut seen: HashSet<String> = merged.iter().cloned().collect();
+                for m in &fetched {
+                    if seen.insert(m.clone()) {
+                        merged.push(m.clone());
+                    }
+                }
+                let updated = state
+                    .store
+                    .custom_providers()
+                    .update(
+                        other,
+                        UpdateCustomProviderInput {
+                            models: Some(merged.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(err_resp)?;
+                Ok(Json(json!({
+                    "status": "ok",
+                    "provider": other,
+                    "name": cp.name,
+                    "count": merged.len(),
+                    "models": merged,
+                    "custom_provider": updated,
+                })))
+            } else {
+                Err(err_resp(TesRouteError::NotFound(format!(
+                    "provider '{id}' not found or does not support dynamic catalog fetch"
+                ))))
+            }
+        }
     }
 }
 

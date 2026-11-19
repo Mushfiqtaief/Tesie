@@ -720,6 +720,17 @@ export const api = {
     );
   },
 
+  fetchProviderModels: async (
+    id: string,
+  ): Promise<{ status: string; provider: string; name: string; count: number; models: unknown[] }> => {
+    return requestJson(
+      `/api/admin/providers/${encodeURIComponent(id)}/fetch-models`,
+      {
+        method: "POST",
+      },
+    );
+  },
+
   getFullSettings: async (): Promise<SettingsFullResponse> => {
     return requestJson<SettingsFullResponse>("/api/admin/settings");
   },
