@@ -27,6 +27,8 @@ pub enum ProviderKind {
     OpenCodeFree,
     #[serde(rename = "antigravity")]
     Antigravity,
+    #[serde(rename = "ovh")]
+    Ovh,
 }
 
 impl ProviderKind {
@@ -34,6 +36,7 @@ impl ProviderKind {
         match self {
             ProviderKind::OpenCodeFree => "opencode",
             ProviderKind::Antigravity => "antigravity",
+            ProviderKind::Ovh => "ovh",
         }
     }
 
@@ -41,6 +44,7 @@ impl ProviderKind {
         match prefix.trim().to_ascii_lowercase().as_str() {
             "oc" | "opencode" => Some(ProviderKind::OpenCodeFree),
             "ag" | "antigravity" => Some(ProviderKind::Antigravity),
+            "ovh" => Some(ProviderKind::Ovh),
             _ => None,
         }
     }
@@ -283,7 +287,7 @@ pub struct ProviderConfig {
 }
 
 pub fn default_routing_strategy_for(provider_id: &str) -> &'static str {
-    if provider_id.eq_ignore_ascii_case("opencode") {
+    if provider_id.eq_ignore_ascii_case("opencode") || provider_id.eq_ignore_ascii_case("ovh") {
         "round-robin"
     } else {
         "fallback"

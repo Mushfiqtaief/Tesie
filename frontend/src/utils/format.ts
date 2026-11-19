@@ -273,6 +273,18 @@ export function getProviderLogo(idOrModel: string): string {
   if (lower === "opencode" || lower.startsWith("oc/")) {
     return "/providers/opencode.png";
   }
+  if (lower === "ovh" || lower.startsWith("ovh/")) {
+    return "/providers/ovh.png";
+  }
+  if (
+    lower === "cp-lf" ||
+    lower === "lf" ||
+    lower.startsWith("lf/") ||
+    lower.includes("logfare") ||
+    lower.includes("logflare")
+  ) {
+    return "/providers/logfare.png";
+  }
   if (lower.includes("claude") || lower.includes("anthropic")) {
     return "/providers/claude.png";
   }
@@ -282,7 +294,7 @@ export function getProviderLogo(idOrModel: string): string {
   if (lower.includes("codex") || lower.includes("gpt") || lower.includes("openai")) {
     return "/providers/openai.png";
   }
-  return "/providers/opencode.png";
+  return "";
 }
 
 export function routingStrategyLabel(strategy?: string | null): string {

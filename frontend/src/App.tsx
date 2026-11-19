@@ -1310,6 +1310,7 @@ export function App() {
               <CombosView
                 combos={combos}
                 models={models}
+                providers={providersCatalog}
                 loading={loading}
                 onCreateCombo={handleCreateCombo}
                 onUpdateCombo={handleUpdateCombo}

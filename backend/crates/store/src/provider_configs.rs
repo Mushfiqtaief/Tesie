@@ -78,14 +78,19 @@ impl ProviderConfigsRepo {
             DEFAULT_PROBE_INTERVAL_SEC
         };
         let default_proxy_mode = if is_custom { "direct" } else { "all" };
+        let (default_window_ms, default_max_reqs) = if provider_id.eq_ignore_ascii_case("ovh") {
+            (60_000, Some(2))
+        } else {
+            (3_600_000, None)
+        };
 
         Ok(ProviderConfig {
             provider_id: provider_id.to_string(),
             enabled: true,
             proxy_mode: default_proxy_mode.to_string(),
             selected_proxy_ids: Vec::new(),
-            window_duration_ms: 3_600_000,
-            max_requests_per_window: None,
+            window_duration_ms: default_window_ms,
+            max_requests_per_window: default_max_reqs,
             max_tokens_per_window: None,
             session_ttl_ms: 14_400_000,
             thinking_level: "auto".to_string(),

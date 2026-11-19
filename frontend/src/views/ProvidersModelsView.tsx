@@ -97,7 +97,7 @@ function normalizeStrategyUi(raw: string | undefined | null, providerId: string)
   if (clean === "fallback" || clean === "smart_fallback" || clean === "smart-fallback") {
     return "fallback";
   }
-  return providerId === "opencode" ? "round-robin" : "fallback";
+  return providerId === "opencode" || providerId === "ovh" ? "round-robin" : "fallback";
 }
 
 function suggestPrefixFromNameOrUrl(name: string, baseUrl: string): string {

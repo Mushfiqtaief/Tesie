@@ -1325,6 +1325,43 @@ async fn get_topology(
         }),
     ];
 
+    let ovh_cfg = state
+        .store
+        .provider_configs()
+        .get_or_default("ovh")
+        .await
+        .unwrap_or_else(|_| tesie_core::ProviderConfig {
+            provider_id: "ovh".into(),
+            enabled: true,
+            proxy_mode: "all".into(),
+            selected_proxy_ids: Vec::new(),
+            window_duration_ms: 60_000,
+            max_requests_per_window: Some(2),
+            max_tokens_per_window: None,
+            session_ttl_ms: 14_400_000,
+            thinking_level: "auto".into(),
+            probe_enabled: false,
+            probe_interval_sec: 60,
+            routing_strategy: "round-robin".into(),
+            updated_at: tesie_store::now_ms(),
+        });
+    let ovh_usage = usage.by_provider.iter().find(|p| p.provider_id == "ovh");
+    providers.push(json!({
+        "id": "ovh",
+        "name": "OVHcloud",
+        "color": "#0053D6",
+        "logo": "/providers/ovh.png",
+        "enabled": ovh_cfg.enabled,
+        "quota_strategy": "ip_pool",
+        "selection_strategy": normalize_routing_strategy(&ovh_cfg.routing_strategy, default_routing_strategy_for("ovh")),
+        "proxy_mode": ovh_cfg.proxy_mode,
+        "active_units": active_ips,
+        "cooling_units": 0,
+        "total_requests": ovh_usage.map(|x| x.total_requests).unwrap_or(0),
+        "total_tokens": ovh_usage.map(|x| x.total_tokens).unwrap_or(0),
+        "avg_tokens_per_sec": ovh_usage.map(|x| x.avg_tokens_per_sec).unwrap_or(0.0)
+    }));
+
     let custom_providers = state
         .store
         .custom_providers()
@@ -1700,6 +1737,54 @@ async fn list_providers(
         }),
     ];
 
+    let ovh_cfg = state
+        .store
+        .provider_configs()
+        .get_or_default("ovh")
+        .await
+        .map_err(err_resp)?;
+    let ovh_proxies = state
+        .store
+        .proxies()
+        .list_for_provider_config(&ovh_cfg)
+        .await
+        .map_err(err_resp)?;
+    let (ovh_healthy, ovh_unhealthy) = count_health(&ovh_proxies);
+    let ovh_strategy = normalize_routing_strategy(
+        &ovh_cfg.routing_strategy,
+        default_routing_strategy_for("ovh"),
+    );
+    let ovh_models: Vec<String> = tesie_core::catalog::OVH_MODELS
+        .iter()
+        .map(|m| format!("ovh/{}", m.id))
+        .collect();
+
+    providers.push(json!({
+        "id": "ovh",
+        "name": "OVHcloud AI Endpoints",
+        "prefix": "ovh",
+        "category": "free",
+        "is_custom": false,
+        "auth_type": "none",
+        "logo": "/providers/ovh.png",
+        "color": "#0053D6",
+        "description": "Zero-key OVHcloud AI Endpoints free tier with 2 requests per minute per IP, proxy pool load balancing, and rate limit database caching.",
+        "config": ovh_cfg,
+        "selection_strategy": ovh_strategy,
+        "routing_strategy": ovh_strategy,
+        "quota_tracking": "per_ip",
+        "quota_refresh_interval_sec": 60,
+        "proxy_test_interval_sec": settings.proxy_test_interval_sec,
+        "health_source": "tesie-core",
+        "healthy_proxies": ovh_healthy,
+        "unhealthy_proxies": ovh_unhealthy,
+        "active_units": ovh_healthy,
+        "cooling_units": 0,
+        "total_units": ovh_proxies.len(),
+        "refreshed_at": now,
+        "models": ovh_models
+    }));
+
     let custom_providers = state
         .store
         .custom_providers()
@@ -1784,7 +1869,7 @@ async fn update_provider_config(
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderConfigInput>,
 ) -> std::result::Result<Json<Value>, Response> {
-    let custom_match = if id != "opencode" && id != "antigravity" {
+    let custom_match = if id != "opencode" && id != "antigravity" && id != "ovh" {
         state
             .store
             .custom_providers()
@@ -1795,7 +1880,7 @@ async fn update_provider_config(
         None
     };
 
-    if id != "opencode" && id != "antigravity" && custom_match.is_none() {
+    if id != "opencode" && id != "antigravity" && id != "ovh" && custom_match.is_none() {
         return Err(err_resp(TesRouteError::NotFound(format!(
             "provider '{id}' not found"
         ))));
@@ -1833,7 +1918,7 @@ async fn test_provider(
     State(state): State<AdminState>,
     Path(id): Path<String>,
 ) -> std::result::Result<Json<Value>, Response> {
-    let custom_match = if id != "opencode" && id != "antigravity" {
+    let custom_match = if id != "opencode" && id != "antigravity" && id != "ovh" {
         state
             .store
             .custom_providers()
@@ -1844,7 +1929,7 @@ async fn test_provider(
         None
     };
 
-    if id != "opencode" && id != "antigravity" && custom_match.is_none() {
+    if id != "opencode" && id != "antigravity" && id != "ovh" && custom_match.is_none() {
         return Err(err_resp(TesRouteError::NotFound(format!(
             "provider '{id}' not found"
         ))));
@@ -1864,6 +1949,61 @@ async fn test_provider(
             "latency_ms": 0,
             "message": "Provider is currently disabled"
         })));
+    }
+
+    if id == "ovh" {
+        let cands = state
+            .store
+            .quotas()
+            .select_healthy_candidates_for_config(started, &cfg, |p| p.alive)
+            .await
+            .map_err(err_resp)?;
+        let Some(first) = cands.first() else {
+            return Ok(Json(json!({
+                "ok": false,
+                "provider_id": id,
+                "latency_ms": now_ms() - started,
+                "message": "No healthy active exit IPs available for OVHcloud"
+            })));
+        };
+
+        let resp = state
+            .mihomo
+            .relay(RelayRequest {
+                target_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models".to_string(),
+                proxy_name: first.proxy.name.clone(),
+                method: "GET".to_string(),
+                fingerprint: "opencode".to_string(),
+                timeout_ms: 10000,
+                upstream_authorization: None,
+                headers: vec![("Accept".into(), "application/json".into())],
+                body: Bytes::new(),
+            })
+            .await;
+
+        let latency = (now_ms() - started).max(1);
+        return match resp {
+            Ok(r) if r.status().is_success() => Ok(Json(json!({
+                "ok": true,
+                "provider_id": id,
+                "proxy": first.proxy.name,
+                "egress_ip": first.proxy.ip,
+                "latency_ms": latency,
+                "message": format!("Reachable via {} ({}ms, OVHcloud AI Endpoints live)", first.proxy.name, latency)
+            }))),
+            Ok(r) => Ok(Json(json!({
+                "ok": false,
+                "provider_id": id,
+                "latency_ms": latency,
+                "message": format!("OVH upstream returned HTTP {}", r.status().as_u16())
+            }))),
+            Err(e) => Ok(Json(json!({
+                "ok": false,
+                "provider_id": id,
+                "latency_ms": latency,
+                "message": e.to_string()
+            }))),
+        };
     }
 
     if let Some(cp) = custom_match {

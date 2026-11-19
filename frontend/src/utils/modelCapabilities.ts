@@ -19,7 +19,7 @@ export function getModelCapabilities(
   const hasVision = Boolean(
     entry?.attachment === true ||
     entryMods.includes("image") ||
-    /gemini|claude-3|claude-sonnet|claude-opus|gpt-4o|gpt-4-turbo|gpt-4.5|o1|o3|-vl|vision|internvl|qwen-vl|pixtral|llava|glm-4v|deepseek-v4\.1|glm-5\.3|mimo-v2\.[56]|mimo-v2-omni|longcat-2\.5|hy4-flash|inkling-2|super-vl|kimi-k2|qwen3|minimax-m3|step-5|crouton|exo-free|pulse-alpha|muse-spark/i.test(
+    /gemini|claude-3|claude-sonnet|claude-opus|gpt-4o|gpt-4-turbo|gpt-4.5|o1|o3|-vl|vision|internvl|qwen-vl|qwen2\.5-vl|qwen3-vl|pixtral|llava|glm-4v|deepseek-v4\.1|glm-5\.3|mimo-v2\.[56]|mimo-v2-omni|longcat-2\.5|hy4-flash|inkling-2|super-vl|kimi-k2|qwen3|minimax-m3|step-5|crouton|exo-free|pulse-alpha|muse-spark/i.test(
       modelSlug,
     )
   );
@@ -154,6 +154,9 @@ export function getModelLimits(
     } else if (slug.includes("o1") || slug.includes("o3")) {
       context = 200000;
       output = 100000;
+    } else if (slug.includes("1017") || slug.includes("deepseek-v4.1-flash-1017")) {
+      context = 1000000;
+      output = 384000;
     } else if (slug.includes("deepseek-v4.1-flash")) {
       context = 200000;
       output = 32000;
@@ -173,9 +176,27 @@ export function getModelLimits(
     } else if (slug.includes("kimi-k2")) {
       context = 262144;
       output = 262144;
+    } else if (slug.includes("deepseek-v4-pro") || slug.includes("deepseek-v4")) {
+      context = 64000;
+      output = 8192;
     } else if (slug.includes("deepseek") || slug.includes("r1")) {
       context = 64000;
       output = 8192;
+    } else if (slug.includes("llama-3_3-70b") || slug.includes("llama-3.3-70b")) {
+      context = 131072;
+      output = 131072;
+    } else if (slug.includes("mistral-small")) {
+      context = 131072;
+      output = 131072;
+    } else if (slug.includes("gpt-oss-120b")) {
+      context = 131072;
+      output = 131072;
+    } else if (slug.includes("qwen3.6-27b") || slug.includes("qwen3.6") || slug.includes("qwen3.5-397b") || slug.includes("qwen3.5-9b")) {
+      context = 262144;
+      output = 65536;
+    } else if (slug.includes("qwen2.5-vl") || slug.includes("qwen3-vl")) {
+      context = 32768;
+      output = 32768;
     } else if (slug.includes("qwen") || slug.includes("llama")) {
       context = 131072;
       output = 8192;

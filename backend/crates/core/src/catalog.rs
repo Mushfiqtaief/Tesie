@@ -164,15 +164,23 @@ pub fn model_level_capabilities(
                 Some("auto".to_string()),
             )
         }
+        ProviderKind::Ovh => (Vec::new(), None),
     }
 }
 
-/// Human-friendly display name for a model ID across OpenCode Free and Antigravity.
+/// Human-friendly display name for a model ID across OpenCode Free, Antigravity, and OVHcloud.
 pub fn display_name_for_model(provider: ProviderKind, model_id: &str) -> String {
     let base = base_model_id(model_id);
     if provider == ProviderKind::Antigravity {
         let (_, name) = canonical_antigravity_model(base);
         return name;
+    }
+    if provider == ProviderKind::Ovh {
+        for m in OVH_MODELS {
+            if m.id.eq_ignore_ascii_case(base) {
+                return m.name.to_string();
+            }
+        }
     }
     for m in OPENCODE_FREE_MODELS {
         if m.id.eq_ignore_ascii_case(base) {
@@ -335,6 +343,11 @@ pub fn is_antigravity_model(model_id: &str) -> bool {
         || base.starts_with("gpt-oss-120b")
 }
 
+pub fn is_ovh_model(model_id: &str) -> bool {
+    let base = base_model_id(model_id).to_ascii_lowercase();
+    OVH_MODELS.iter().any(|m| m.id.to_ascii_lowercase() == base)
+}
+
 pub fn resolve_provider_for_model(parsed: &ParsedModel) -> ProviderKind {
     if let Some(p) = parsed.provider_hint {
         return p;
@@ -342,11 +355,14 @@ pub fn resolve_provider_for_model(parsed: &ParsedModel) -> ProviderKind {
     if is_antigravity_model(&parsed.model_id) {
         return ProviderKind::Antigravity;
     }
+    if is_ovh_model(&parsed.model_id) {
+        return ProviderKind::Ovh;
+    }
     ProviderKind::OpenCodeFree
 }
 
 pub fn target_format(provider: ProviderKind, model_id: &str) -> WireFormat {
-    if provider == ProviderKind::Antigravity {
+    if provider == ProviderKind::Antigravity || provider == ProviderKind::Ovh {
         return WireFormat::OpenAiChat;
     }
     let base = base_model_id(model_id).to_ascii_lowercase();
@@ -607,10 +623,91 @@ static ANTIGRAVITY_MODELS: &[CatalogModel] = &[
     },
 ];
 
+pub static OVH_MODELS: &[CatalogModel] = &[
+    CatalogModel {
+        id: "Meta-Llama-3_3-70B-Instruct",
+        name: "Llama 3.3 70B Instruct",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Qwen2.5-VL-72B-Instruct",
+        name: "Qwen 2.5 VL 72B (Vision)",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "qwen3-vl-30b-a3b",
+        name: "Qwen 3 VL 30B (Vision)",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Mistral-Small-3.2-24B-Instruct-2506",
+        name: "Mistral Small 3.2 24B",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Qwen3.6-27B",
+        name: "Qwen 3.6 27B",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Qwen3.5-397B-A17B",
+        name: "Qwen 3.5 397B",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Qwen3.5-9B",
+        name: "Qwen 3.5 9B",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "whisper-large-v3-turbo",
+        name: "Whisper Large V3 Turbo",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "laguna-xs-2.1",
+        name: "Laguna XS 2.1 (Coding)",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+    CatalogModel {
+        id: "Olala-v1.0-mini-7A1B",
+        name: "Olala V1.0 Mini",
+        provider: ProviderKind::Ovh,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[WireFormat::OpenAiChat],
+    },
+];
+
 pub fn curated_models_for_provider(provider: ProviderKind) -> &'static [CatalogModel] {
     match provider {
         ProviderKind::OpenCodeFree => OPENCODE_FREE_MODELS,
         ProviderKind::Antigravity => ANTIGRAVITY_MODELS,
+        ProviderKind::Ovh => OVH_MODELS,
     }
 }
 

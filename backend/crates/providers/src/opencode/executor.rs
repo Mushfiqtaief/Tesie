@@ -23,6 +23,7 @@ use tracing::{debug, info, warn};
 
 use crate::antigravity::AntigravityEngine;
 use crate::custom::CustomProviderEngine;
+use crate::ovh::OvhEngine;
 
 use crate::opencode::fingerprint::{
     ToolRenameMap, apply_fingerprint_tools, apply_forced_thinking_level, apply_thinking_level,
@@ -202,6 +203,7 @@ pub struct OpenCodeEngine {
     selector: Arc<IpPoolSelector>,
     antigravity: Arc<AntigravityEngine>,
     custom: Arc<CustomProviderEngine>,
+    ovh: Arc<OvhEngine>,
     config: OpenCodeConfig,
     conv_sessions: Mutex<HashMap<String, (String, i64)>>,
     active_requests: Arc<Mutex<HashMap<String, ActiveRequestInfo>>>,
@@ -222,12 +224,14 @@ impl OpenCodeEngine {
     ) -> Self {
         let antigravity = Arc::new(AntigravityEngine::new(store.clone(), mihomo.clone()));
         let custom = Arc::new(CustomProviderEngine::new(store.clone(), mihomo.clone()));
+        let ovh = Arc::new(OvhEngine::new(store.clone(), mihomo.clone()));
         Self {
             store,
             mihomo,
             selector,
             antigravity,
             custom,
+            ovh,
             config,
             conv_sessions: Mutex::new(HashMap::new()),
             active_requests: Arc::new(Mutex::new(HashMap::new())),
@@ -251,6 +255,10 @@ impl OpenCodeEngine {
 
     pub fn custom(&self) -> &Arc<CustomProviderEngine> {
         &self.custom
+    }
+
+    pub fn ovh(&self) -> &Arc<OvhEngine> {
+        &self.ovh
     }
 
     pub fn config(&self) -> &OpenCodeConfig {
@@ -861,6 +869,7 @@ impl OpenCodeEngine {
         };
         out.extend(self.antigravity.active_requests_snapshot());
         out.extend(self.custom.active_requests_snapshot());
+        out.extend(self.ovh.active_requests_snapshot());
         out
     }
 
@@ -875,6 +884,7 @@ impl OpenCodeEngine {
             .filter(|(_, ts)| now.saturating_sub(*ts) < 60_000);
         let (ag_last_ts, ag_err_ts) = self.antigravity.recent_signals();
         let (cu_last, cu_err) = self.custom.recent_signals();
+        let (ovh_last, ovh_err) = self.ovh.recent_signals();
 
         let pick_latest = |items: Vec<(String, i64)>| -> Option<String> {
             items.into_iter().max_by_key(|(_, ts)| *ts).map(|(p, _)| p)
@@ -890,6 +900,9 @@ impl OpenCodeEngine {
         if let Some(x) = cu_last {
             last_candidates.push(x);
         }
+        if let Some(x) = ovh_last {
+            last_candidates.push(x);
+        }
 
         let mut err_candidates = Vec::new();
         if let Some(x) = oc_err {
@@ -899,6 +912,9 @@ impl OpenCodeEngine {
             err_candidates.push(("antigravity".to_string(), ts));
         }
         if let Some(x) = cu_err {
+            err_candidates.push(x);
+        }
+        if let Some(x) = ovh_err {
             err_candidates.push(x);
         }
 
@@ -920,6 +936,9 @@ impl OpenCodeEngine {
 
         if provider == ProviderKind::Antigravity {
             return self.antigravity.execute_chat(req, parsed).await;
+        }
+        if provider == ProviderKind::Ovh {
+            return self.ovh.execute_chat(req, parsed).await;
         }
         let provider_cfg = self
             .store

@@ -32,6 +32,7 @@ import type {
   ComboStrategy,
   CreateComboPayload,
   OpenAiModelEntry,
+  ProviderCatalogItem,
   UpdateComboPayload,
 } from "../types";
 import { getProviderLogo } from "../utils/format";
@@ -44,6 +45,7 @@ import {
   getModelCapabilities,
   getModelLimits,
   getModelChipClasses,
+  formatTokenLimit,
 } from "../utils/modelCapabilities";
 
 const STRATEGY_META: Record<ComboStrategy, { label: string; desc: string }> = {
@@ -77,12 +79,163 @@ interface CatalogModelMeta {
   displayName: string;
   supportedLevels: string[];
   defaultLevel: string | null;
+  entry?: OpenAiModelEntry;
+  providerLogo: string;
+  providerColor?: string;
+  providerName: string;
+  providerId: string;
 }
 
 interface ChainDraftItem {
   uid: string;
   baseModel: string;
   level: string | null;
+}
+
+function resolveModelProviderInfo(
+  prefixedId: string,
+  entry: OpenAiModelEntry | undefined,
+  providers: ProviderCatalogItem[],
+): { providerId: string; providerName: string; providerLogo: string; providerColor: string } {
+  const slashIdx = prefixedId.indexOf("/");
+  const prefix = slashIdx >= 0 ? prefixedId.slice(0, slashIdx).toLowerCase() : "";
+  const ownedBy = entry?.owned_by?.toLowerCase() || "";
+
+  // 1. Check matching provider from configured providers catalog
+  const matched = providers.find(
+    (p) =>
+      p.id.toLowerCase() === prefix ||
+      p.prefix.toLowerCase() === prefix ||
+      p.id.toLowerCase() === ownedBy ||
+      p.prefix.toLowerCase() === ownedBy,
+  );
+
+  if (matched) {
+    return {
+      providerId: matched.id,
+      providerName: matched.name,
+      providerLogo: matched.favicon_url || matched.logo || getProviderLogo(matched.prefix || matched.id),
+      providerColor: matched.color || "#0EA5E9",
+    };
+  }
+
+  // 2. Specific heuristics
+  if (prefix === "lf" || prefix === "cp-lf" || ownedBy.includes("logfare") || ownedBy.includes("logflare")) {
+    return {
+      providerId: "cp-lf",
+      providerName: "Logfare",
+      providerLogo: "/providers/logfare.png",
+      providerColor: "#0EA5E9",
+    };
+  }
+  if (prefix === "ovh" || ownedBy === "ovh") {
+    return {
+      providerId: "ovh",
+      providerName: "OVHcloud",
+      providerLogo: "/providers/ovh.png",
+      providerColor: "#0053D6",
+    };
+  }
+  if (prefix === "ag" || prefix === "antigravity" || ownedBy === "antigravity") {
+    return {
+      providerId: "antigravity",
+      providerName: "Antigravity",
+      providerLogo: "/providers/antigravity.png",
+      providerColor: "#38BDF8",
+    };
+  }
+  if (prefix === "oc" || prefix === "opencode" || ownedBy === "opencode") {
+    return {
+      providerId: "opencode",
+      providerName: "OpenCode Free",
+      providerLogo: "/providers/opencode.png",
+      providerColor: "#E56A4A",
+    };
+  }
+
+  return {
+    providerId: prefix || "custom",
+    providerName: prefix ? prefix.toUpperCase() : "Custom",
+    providerLogo: getProviderLogo(prefixedId),
+    providerColor: "#64748B",
+  };
+}
+
+interface EffectiveComboLimits {
+  label: string;
+  tooltip: string;
+  contextMin?: number;
+  contextMax?: number;
+  outputMin?: number;
+  outputMax?: number;
+  primaryContext?: number;
+  primaryOutput?: number;
+}
+
+function computeComboLimits(
+  modelSpecs: string[],
+  catalogMap: Map<string, CatalogModelMeta>,
+  strategy: ComboStrategy,
+): EffectiveComboLimits | null {
+  if (modelSpecs.length === 0) return null;
+
+  const resolvedLimits = modelSpecs.map((spec) => {
+    const parsed = parseComboModelSpec(spec);
+    const meta = catalogMap.get(parsed.baseModel);
+    return getModelLimits(parsed.baseModel, meta?.entry);
+  });
+
+  const validLimits = resolvedLimits.filter((l): l is NonNullable<typeof l> => l != null);
+  if (validLimits.length === 0) return null;
+
+  const contexts = validLimits.map((l) => l.context).filter((c): c is number => c != null && c > 0);
+  const outputs = validLimits.map((l) => l.output).filter((o): o is number => o != null && o > 0);
+
+  const primaryLimit = validLimits[0];
+  const primaryCtx = primaryLimit?.context;
+  const primaryOut = primaryLimit?.output;
+
+  const minCtx = contexts.length > 0 ? Math.min(...contexts) : undefined;
+  const maxCtx = contexts.length > 0 ? Math.max(...contexts) : undefined;
+  const minOut = outputs.length > 0 ? Math.min(...outputs) : undefined;
+  const maxOut = outputs.length > 0 ? Math.max(...outputs) : undefined;
+
+  let ctxPart = "";
+  if (minCtx != null && maxCtx != null) {
+    if (minCtx === maxCtx) {
+      ctxPart = `ctx ${formatTokenLimit(minCtx)}`;
+    } else {
+      ctxPart = `ctx ${formatTokenLimit(minCtx)} ~ ${formatTokenLimit(maxCtx)}`;
+    }
+  }
+
+  let outPart = "";
+  if (minOut != null && maxOut != null) {
+    if (minOut === maxOut) {
+      outPart = `out ${formatTokenLimit(minOut)}`;
+    } else {
+      outPart = `out ${formatTokenLimit(minOut)} ~ ${formatTokenLimit(maxOut)}`;
+    }
+  }
+
+  const label = [ctxPart, outPart].filter(Boolean).join(" · ");
+  let tooltip = "";
+  if (strategy === "fallback" && primaryLimit) {
+    tooltip = `Primary: ${formatTokenLimit(primaryCtx)} ctx / ${formatTokenLimit(primaryOut)} out · Fallback Floor: ${formatTokenLimit(minCtx)} ctx / ${formatTokenLimit(minOut)} out`;
+  } else {
+    tooltip = `Pipeline Range: ${formatTokenLimit(minCtx)} - ${formatTokenLimit(maxCtx)} ctx · ${formatTokenLimit(minOut)} - ${formatTokenLimit(maxOut)} out`;
+  }
+
+  return {
+    label,
+    tooltip,
+    contextMin: minCtx,
+    contextMax: maxCtx,
+    outputMin: minOut,
+    outputMax: maxOut,
+    primaryContext: primaryCtx,
+    primaryOutput: primaryOut,
+  };
 }
 
 function parseComboModelSpec(raw: string): { baseModel: string; level: string | null } {
@@ -109,6 +262,7 @@ function formatComboModelSpec(baseModel: string, level: string | null): string {
 export function CombosView({
   combos,
   models,
+  providers = [],
   loading,
   onCreateCombo,
   onUpdateCombo,
@@ -117,6 +271,7 @@ export function CombosView({
 }: {
   combos: ComboRecord[];
   models: OpenAiModelEntry[];
+  providers?: ProviderCatalogItem[];
   loading: boolean;
   onCreateCombo: (payload: CreateComboPayload) => Promise<void>;
   onUpdateCombo: (id: string, payload: UpdateComboPayload) => Promise<void>;
@@ -138,9 +293,7 @@ export function CombosView({
   const [strategy, setStrategy] = useState<ComboStrategy>("fallback");
   const [chain, setChain] = useState<ChainDraftItem[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
-  const [pickerCategory, setPickerCategory] = useState<
-    "all" | "vision" | "thinking" | "antigravity" | "opencode"
-  >("all");
+  const [pickerCategory, setPickerCategory] = useState<string>("all");
   const [customModelInput, setCustomModelInput] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -153,19 +306,50 @@ export function CombosView({
         ? m.id
         : m.owned_by === "antigravity"
           ? `ag/${m.id}`
-          : `oc/${m.id}`;
+          : m.owned_by === "ovh"
+            ? `ovh/${m.id}`
+            : `oc/${m.id}`;
       if (map.has(prefixedId)) continue;
+      const provInfo = resolveModelProviderInfo(prefixedId, m, providers);
       const meta: CatalogModelMeta = {
         prefixedId,
         displayName: m.display_name || m.id,
         supportedLevels: Array.isArray(m.supported_levels) ? m.supported_levels : [],
         defaultLevel: m.default_level ?? null,
+        entry: m,
+        providerLogo: provInfo.providerLogo,
+        providerColor: provInfo.providerColor,
+        providerName: provInfo.providerName,
+        providerId: provInfo.providerId,
       };
       map.set(prefixedId, meta);
       list.push(meta);
     }
     return { map, list };
-  }, [models]);
+  }, [models, providers]);
+
+  const availableProviderFilters = useMemo(() => {
+    const map = new Map<
+      string,
+      { id: string; name: string; count: number; logo: string; color?: string }
+    >();
+    for (const item of catalogEntries.list) {
+      const pid = item.providerId;
+      const cur = map.get(pid);
+      if (cur) {
+        cur.count++;
+      } else {
+        map.set(pid, {
+          id: pid,
+          name: item.providerName,
+          count: 1,
+          logo: item.providerLogo,
+          color: item.providerColor,
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [catalogEntries.list]);
 
   if (loading && combos.length === 0 && models.length === 0) {
     return <TableSkeleton rows={5} />;
@@ -374,10 +558,12 @@ export function CombosView({
       if (!getModelCapabilities(meta.prefixedId).hasVision) return false;
     } else if (pickerCategory === "thinking") {
       if (!getModelCapabilities(meta.prefixedId).hasThinking) return false;
-    } else if (pickerCategory === "antigravity") {
-      if (!meta.prefixedId.startsWith("ag/") && !meta.prefixedId.startsWith("antigravity/")) return false;
-    } else if (pickerCategory === "opencode") {
-      if (!meta.prefixedId.startsWith("oc/") && !meta.prefixedId.startsWith("opencode/")) return false;
+    } else if (pickerCategory !== "all") {
+      const matchProvider =
+        meta.providerId === pickerCategory ||
+        meta.providerId.toLowerCase() === pickerCategory.toLowerCase() ||
+        meta.prefixedId.toLowerCase().startsWith(`${pickerCategory.toLowerCase()}/`);
+      if (!matchProvider) return false;
     }
 
     const pq = pickerSearch.trim().toLowerCase();
@@ -448,106 +634,118 @@ export function CombosView({
         />
       ) : (
         <div className="space-y-3">
-          {filteredCombos.map((combo) => (
-            <Card key={combo.id} noPadding className="overflow-hidden">
-              <div className="p-4 sm:p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <ProviderIcon name={combo.name} isCombo size={34} />
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-sm font-semibold text-[var(--text-primary)]">
-                          {combo.name}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => copyText(combo.id, combo.name)}
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-                          title="Copy combo model ID"
-                        >
-                          {copiedId === combo.id ? (
-                            <Check className="h-3 w-3 text-[var(--success)]" />
-                          ) : (
-                            <Copy className="h-3 w-3" />
+          {filteredCombos.map((combo) => {
+            const comboLimits = computeComboLimits(combo.models, catalogEntries.map, combo.strategy);
+            return (
+              <Card key={combo.id} noPadding className="overflow-hidden">
+                <div className="p-4 sm:p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <ProviderIcon name={combo.name} isCombo size={34} />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-sm font-semibold text-[var(--text-primary)]">
+                            {combo.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => copyText(combo.id, combo.name)}
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                            title="Copy combo model ID"
+                          >
+                            {copiedId === combo.id ? (
+                              <Check className="h-3 w-3 text-[var(--success)]" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                            {copiedId === combo.id ? "Copied" : "Copy"}
+                          </button>
+                          <StatusPill tone="neutral">
+                            {STRATEGY_META[combo.strategy]?.label ?? combo.strategy}
+                          </StatusPill>
+                          <StatusPill tone={combo.enabled ? "success" : "neutral"} dot>
+                            {combo.enabled ? "Enabled" : "Paused"}
+                          </StatusPill>
+                          {comboLimits && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--accent)] cursor-help shadow-2xs"
+                              title={comboLimits.tooltip}
+                            >
+                              <Layers className="h-3 w-3 text-[var(--text-muted)]" />
+                              {comboLimits.label}
+                            </span>
                           )}
-                          {copiedId === combo.id ? "Copied" : "Copy"}
-                        </button>
-                        <StatusPill tone="neutral">
-                          {STRATEGY_META[combo.strategy]?.label ?? combo.strategy}
-                        </StatusPill>
-                        <StatusPill tone={combo.enabled ? "success" : "neutral"} dot>
-                          {combo.enabled ? "Enabled" : "Paused"}
-                        </StatusPill>
+                        </div>
                       </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onTestModel(combo.name)}
+                      >
+                        <Play className="h-3 w-3" />
+                        Test
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => openEdit(combo)}>
+                        <Pencil className="h-3 w-3" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          void onUpdateCombo(combo.id, { enabled: !combo.enabled })
+                        }
+                      >
+                        {combo.enabled ? "Pause" : "Enable"}
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => void onDeleteCombo(combo.id, combo.name)}
+                        className="rounded-md p-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
+                        title={`Delete ${combo.name}`}
+                        aria-label={`Delete ${combo.name}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onTestModel(combo.name)}
-                    >
-                      <Play className="h-3 w-3" />
-                      Test
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(combo)}>
-                      <Pencil className="h-3 w-3" />
-                      Edit
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        void onUpdateCombo(combo.id, { enabled: !combo.enabled })
-                      }
-                    >
-                      {combo.enabled ? "Pause" : "Enable"}
-                    </Button>
-                    <button
-                      type="button"
-                      onClick={() => void onDeleteCombo(combo.id, combo.name)}
-                      className="rounded-md p-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
-                      title={`Delete ${combo.name}`}
-                      aria-label={`Delete ${combo.name}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Ordered Model Chain */}
-                <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] pt-3.5">
-                  {combo.models.map((m, idx) => {
-                    const parsed = parseComboModelSpec(m);
-                    const meta = catalogEntries.map.get(parsed.baseModel);
-                    const warning = validateChainEntry(parsed.baseModel, parsed.level);
-                    const friendlyName = meta?.displayName || parsed.baseModel;
-                    const caps = getModelCapabilities(parsed.baseModel);
-                    const limits = getModelLimits(parsed.baseModel);
-                    const chipStyle = getModelChipClasses(caps);
-                    return (
-                      <div key={`${m}-${idx}`} className="flex items-center gap-2">
-                        <div
-                          title={warning ? `${m} — ${warning}` : limits?.tooltip ? `${m} (${limits.tooltip})` : m}
-                          className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors ${
-                            warning
-                              ? "border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[var(--warning-soft)]"
-                              : chipStyle
-                          }`}
-                        >
-                          <span className="font-mono text-[10px] font-semibold text-[var(--text-muted)]">
-                            {idx + 1}
-                          </span>
-                          <ProviderIcon src={getProviderLogo(parsed.baseModel)} name={m} size={18} />
-                          <span className="text-xs font-medium text-[var(--text-primary)]">
-                            {friendlyName}
-                            {parsed.level && (
-                              <span className="ml-1 font-mono text-[11px] font-semibold text-[var(--accent)]">
-                                ({parsed.level})
-                              </span>
-                            )}
-                          </span>
+                  {/* Ordered Model Chain */}
+                  <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] pt-3.5">
+                    {combo.models.map((m, idx) => {
+                      const parsed = parseComboModelSpec(m);
+                      const meta = catalogEntries.map.get(parsed.baseModel);
+                      const warning = validateChainEntry(parsed.baseModel, parsed.level);
+                      const friendlyName = meta?.displayName || parsed.baseModel;
+                      const caps = getModelCapabilities(parsed.baseModel);
+                      const limits = getModelLimits(parsed.baseModel, meta?.entry);
+                      const chipStyle = getModelChipClasses(caps);
+                      const provLogo = meta?.providerLogo || getProviderLogo(parsed.baseModel);
+                      return (
+                        <div key={`${m}-${idx}`} className="flex items-center gap-2">
+                          <div
+                            title={warning ? `${m} — ${warning}` : limits?.tooltip ? `${m} (${limits.tooltip})` : m}
+                            className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors ${
+                              warning
+                                ? "border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[var(--warning-soft)]"
+                                : chipStyle
+                            }`}
+                          >
+                            <span className="font-mono text-[10px] font-semibold text-[var(--text-muted)]">
+                              {idx + 1}
+                            </span>
+                            <ProviderIcon src={provLogo} name={friendlyName} color={meta?.providerColor} size={18} />
+                            <span className="text-xs font-medium text-[var(--text-primary)]">
+                              {friendlyName}
+                              {parsed.level && (
+                                <span className="ml-1 font-mono text-[11px] font-semibold text-[var(--accent)]">
+                                  ({parsed.level})
+                                </span>
+                              )}
+                            </span>
                           <ModelCapabilityBadges caps={caps} compact />
                           <ModelLimitBadge limits={limits} compact />
                           {warning && (
@@ -569,7 +767,8 @@ export function CombosView({
                 </div>
               </div>
             </Card>
-          ))}
+          );
+        })}
         </div>
       )}
 
@@ -646,6 +845,26 @@ export function CombosView({
               )}
             </div>
 
+            {/* Live Effective Limits for Combo Chain */}
+            {(() => {
+              const chainLimits = computeComboLimits(
+                chain.map((item) => formatComboModelSpec(item.baseModel, item.level)),
+                catalogEntries.map,
+                strategy,
+              );
+              if (!chainLimits) return null;
+              return (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-3 py-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    <span className="text-[var(--text-secondary)] font-medium">Pipeline Limits:</span>
+                    <span className="font-mono font-semibold text-[var(--accent)]">{chainLimits.label}</span>
+                  </div>
+                  <span className="font-mono text-[11px] text-[var(--text-muted)]">{chainLimits.tooltip}</span>
+                </div>
+              );
+            })()}
+
             {chain.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-elevated)]/30 p-6 text-center space-y-1">
                 <Layers className="mx-auto h-6 w-6 text-[var(--text-muted)]" />
@@ -663,7 +882,8 @@ export function CombosView({
                   const warning = validateChainEntry(item.baseModel, item.level);
                   const wireSpec = formatComboModelSpec(item.baseModel, item.level);
                   const caps = getModelCapabilities(item.baseModel);
-                  const limits = getModelLimits(item.baseModel);
+                  const limits = getModelLimits(item.baseModel, meta?.entry);
+                  const provLogo = meta?.providerLogo || getProviderLogo(item.baseModel);
                   const levelUnsupported =
                     !!item.level &&
                     ((hasMultipleLevels && !supportedLevels.includes(item.level)) ||
@@ -683,8 +903,9 @@ export function CombosView({
                           {idx + 1}
                         </span>
                         <ProviderIcon
-                          src={getProviderLogo(item.baseModel)}
-                          name={item.baseModel}
+                          src={provLogo}
+                          name={meta?.displayName || item.baseModel}
+                          color={meta?.providerColor}
                           size={22}
                         />
                         <div className="min-w-0 flex-1">
@@ -795,7 +1016,7 @@ export function CombosView({
               </div>
             </div>
 
-            {/* Filter Pills */}
+            {/* Dynamic Filter Pills */}
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
@@ -806,7 +1027,7 @@ export function CombosView({
                     : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
                 }`}
               >
-                All Models
+                All Models ({catalogEntries.list.length})
               </button>
               <button
                 type="button"
@@ -832,28 +1053,31 @@ export function CombosView({
                 <Brain className="h-3 w-3" />
                 Thinking
               </button>
-              <button
-                type="button"
-                onClick={() => setPickerCategory("antigravity")}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  pickerCategory === "antigravity"
-                    ? "bg-[var(--accent)] text-white shadow-2xs"
-                    : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
-                }`}
-              >
-                Antigravity
-              </button>
-              <button
-                type="button"
-                onClick={() => setPickerCategory("opencode")}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  pickerCategory === "opencode"
-                    ? "bg-[var(--accent)] text-white shadow-2xs"
-                    : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
-                }`}
-              >
-                OpenCode Free
-              </button>
+              {availableProviderFilters.map((prov) => {
+                const isActive = pickerCategory === prov.id;
+                return (
+                  <button
+                    key={prov.id}
+                    type="button"
+                    onClick={() => setPickerCategory(prov.id)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      isActive
+                        ? "bg-[var(--accent)] text-white shadow-2xs"
+                        : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
+                    }`}
+                  >
+                    <ProviderIcon src={prov.logo} name={prov.name} color={prov.color} size={14} />
+                    <span>{prov.name}</span>
+                    <span
+                      className={`font-mono text-[10px] ${
+                        isActive ? "text-white/80" : "text-[var(--text-muted)]"
+                      }`}
+                    >
+                      ({prov.count})
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Catalog Grid */}
@@ -865,7 +1089,7 @@ export function CombosView({
               ) : (
                 pickerFiltered.map((meta) => {
                   const caps = getModelCapabilities(meta.prefixedId);
-                  const limits = getModelLimits(meta.prefixedId);
+                  const limits = getModelLimits(meta.prefixedId, meta.entry);
                   return (
                     <button
                       key={meta.prefixedId}
@@ -875,7 +1099,7 @@ export function CombosView({
                       title={`Click to add ${meta.prefixedId}`}
                     >
                       <div className="flex min-w-0 items-center gap-2">
-                        <ProviderIcon src={getProviderLogo(meta.prefixedId)} name={meta.prefixedId} size={20} />
+                        <ProviderIcon src={meta.providerLogo} name={meta.displayName} color={meta.providerColor} size={20} />
                         <div className="min-w-0">
                           <div className="truncate text-xs font-semibold text-[var(--text-primary)]">
                             {meta.displayName}

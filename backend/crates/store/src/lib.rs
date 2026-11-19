@@ -410,6 +410,17 @@ impl Store {
         .await
         .map_err(map_sqlx_err)?;
 
+        sqlx::query(
+            "INSERT OR IGNORE INTO provider_configs (
+                provider_id, enabled, proxy_mode, selected_proxy_ids_json, window_duration_ms,
+                max_requests_per_window, max_tokens_per_window, session_ttl_ms, probe_interval_sec, routing_strategy, updated_at
+             ) VALUES ('ovh', 1, 'all', '[]', 60000, 2, NULL, 14400000, 60, 'round-robin', ?)",
+        )
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+
         // Remove deprecated OpenCode Zen & OpenCode Go rows so only OpenCode Free & Antigravity remain
         sqlx::query("DELETE FROM provider_configs WHERE provider_id IN ('opencode-zen', 'opencode-go')")
             .execute(&self.pool)

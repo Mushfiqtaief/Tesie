@@ -97,6 +97,10 @@ fn infer_model_limits(
         (Some(262_144), None, Some(262_144))
     } else if lower.contains("deepseek") || lower.contains("r1") {
         (Some(64_000), None, Some(8_192))
+    } else if lower.contains("whisper") {
+        (Some(32_768), None, Some(4_096))
+    } else if lower.contains("mistral") {
+        (Some(131_072), None, Some(32_768))
     } else if lower.contains("qwen") || lower.contains("llama") {
         (Some(131_072), None, Some(8_192))
     } else {
@@ -453,6 +457,48 @@ impl ModelCatalogCache {
                             });
                         }
                     }
+                }
+            }
+        }
+
+        // Include OVHcloud AI Endpoints models if ovh provider is enabled
+        let ovh_enabled = store
+            .provider_configs()
+            .get_or_default("ovh")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(true);
+
+        if ovh_enabled {
+            for m in curated_models_for_provider(ProviderKind::Ovh) {
+                let prefixed_id = format!("ovh/{}", m.id);
+                if seen.insert(prefixed_id.clone()) {
+                    let (supported_levels, default_level) = model_level_capabilities(
+                        ProviderKind::Ovh,
+                        m.id,
+                        Some(true),
+                        None,
+                    );
+                    let (attachment, reasoning, modalities, tool_call) =
+                        infer_model_capabilities(&prefixed_id, None, None, None, None);
+                    let (limit, context_length, max_output_tokens) =
+                        infer_model_limits(&prefixed_id, None);
+                    out.push(OpenAiModelEntry {
+                        id: prefixed_id,
+                        object: "model",
+                        created: created_sec,
+                        owned_by: "ovh".to_string(),
+                        display_name: m.name.to_string(),
+                        supported_levels,
+                        default_level,
+                        attachment,
+                        reasoning,
+                        modalities,
+                        tool_call,
+                        limit,
+                        context_length,
+                        max_output_tokens,
+                    });
                 }
             }
         }

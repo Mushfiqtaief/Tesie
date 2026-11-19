@@ -64,6 +64,35 @@ impl QuotasRepo {
         Ok(())
     }
 
+    pub async fn ensure_ip_quota_row_for_provider(
+        &self,
+        provider_id: &str,
+        ip_key: &str,
+        window_duration_ms: i64,
+        max_requests: Option<i64>,
+        now: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO ip_quotas (
+                ip_key, provider_id, window_started_at, window_duration_ms,
+                requests_in_window, max_requests_per_window,
+                tokens_in_window, max_tokens_per_window,
+                total_requests, total_prompt_tokens, total_completion_tokens,
+                total_rate_limits, status, backoff_level, updated_at
+            ) VALUES (?, ?, ?, ?, 0, ?, 0, NULL, 0, 0, 0, 0, 'active', 0, ?)",
+        )
+        .bind(ip_key)
+        .bind(provider_id)
+        .bind(now)
+        .bind(window_duration_ms)
+        .bind(max_requests)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+        Ok(())
+    }
+
     pub async fn refresh_windows_and_cooldowns(&self, now: i64) -> Result<()> {
         sqlx::query(
             "UPDATE ip_quotas
@@ -131,12 +160,98 @@ impl QuotasRepo {
     where
         F: Fn(&ProxyNode) -> bool,
     {
+        if cfg.provider_id == "ovh" {
+            return self.select_healthy_ovh_candidates(now, cfg, is_healthy).await;
+        }
         self.refresh_windows_and_cooldowns(now).await?;
         let proxies = ProxiesRepo::new(self.pool.clone())
             .list_for_provider_config(cfg)
             .await?;
         self.select_healthy_candidates_from_proxies(now, proxies, is_healthy)
             .await
+    }
+
+    pub async fn select_healthy_ovh_candidates<F>(
+        &self,
+        now: i64,
+        cfg: &ProviderConfig,
+        is_healthy: F,
+    ) -> Result<Vec<IpCandidate>>
+    where
+        F: Fn(&ProxyNode) -> bool,
+    {
+        // 1. Auto-reset any expired cooldowns for OVH
+        let _ = sqlx::query(
+            "UPDATE ip_quotas
+             SET status = 'active', cooldown_until = NULL, backoff_level = 0, updated_at = ?
+             WHERE provider_id = 'ovh' AND status = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?",
+        )
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+
+        // 2. Auto-reset any expired windows for OVH (window_duration_ms = 60_000)
+        let _ = sqlx::query(
+            "UPDATE ip_quotas
+             SET window_started_at = ?, requests_in_window = 0, tokens_in_window = 0, updated_at = ?
+             WHERE provider_id = 'ovh' AND ? - window_started_at >= window_duration_ms",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+
+        let proxies = ProxiesRepo::new(self.pool.clone())
+            .list_for_provider_config(cfg)
+            .await?;
+
+        for node in &proxies {
+            let ovh_key = format!("ovh:{}", node.ip_key());
+            self.ensure_ip_quota_row_for_provider("ovh", &ovh_key, 60_000, Some(2), now)
+                .await?;
+        }
+
+        let all_quotas = self.list_ip_quotas_raw().await?;
+        let quota_map: HashMap<String, IpQuota> = all_quotas
+            .into_iter()
+            .filter(|q| q.provider_id == "ovh")
+            .map(|q| (q.ip_key.clone(), q))
+            .collect();
+
+        let mut seen_ips = HashSet::new();
+        let mut candidates = Vec::new();
+        for proxy in proxies {
+            if !is_healthy(&proxy) {
+                continue;
+            }
+            let ip_key = proxy.ip_key();
+            let ovh_key = format!("ovh:{ip_key}");
+            if !seen_ips.insert(ip_key.clone()) {
+                continue;
+            }
+            let Some(quota) = quota_map.get(&ovh_key).cloned() else {
+                continue;
+            };
+            if quota.status == IpQuotaStatus::Cooldown {
+                if let Some(until) = quota.cooldown_until {
+                    if until > now {
+                        continue;
+                    }
+                }
+            }
+            if let Some(max_req) = quota.max_requests_per_window {
+                if max_req > 0 && quota.requests_in_window >= max_req {
+                    if now - quota.window_started_at < quota.window_duration_ms {
+                        continue;
+                    }
+                }
+            }
+            candidates.push(IpCandidate { proxy, quota });
+        }
+
+        Ok(interleave_candidates_by_subnet(candidates))
     }
 
     async fn select_healthy_candidates_from_proxies<F>(
@@ -277,6 +392,82 @@ impl QuotasRepo {
         .bind(now)
         .bind(now)
         .bind(ip_key)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+        Ok(())
+    }
+
+    pub async fn record_ovh_rate_limit(
+        &self,
+        ip_key: &str,
+        cooldown_until: i64,
+        error_msg: &str,
+        now: i64,
+    ) -> Result<()> {
+        let ovh_key = if ip_key.starts_with("ovh:") {
+            ip_key.to_string()
+        } else {
+            format!("ovh:{ip_key}")
+        };
+        sqlx::query(
+            "UPDATE ip_quotas
+             SET status = 'cooldown', cooldown_until = ?, total_rate_limits = total_rate_limits + 1,
+                 last_error = ?, updated_at = ?
+             WHERE ip_key = ?",
+        )
+        .bind(cooldown_until)
+        .bind(error_msg)
+        .bind(now)
+        .bind(&ovh_key)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+        Ok(())
+    }
+
+    pub async fn record_ovh_success(
+        &self,
+        ip_key: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        remaining_reqs: Option<i64>,
+        reset_sec: Option<i64>,
+        now: i64,
+    ) -> Result<()> {
+        let ovh_key = if ip_key.starts_with("ovh:") {
+            ip_key.to_string()
+        } else {
+            format!("ovh:{ip_key}")
+        };
+        let (status, cooldown_until) = if remaining_reqs == Some(0) {
+            let dur = reset_sec.unwrap_or(60).max(1);
+            ("cooldown", Some(now + dur * 1000))
+        } else {
+            ("active", None)
+        };
+
+        sqlx::query(
+            "UPDATE ip_quotas
+             SET requests_in_window = requests_in_window + 1,
+                 total_requests = total_requests + 1,
+                 total_prompt_tokens = total_prompt_tokens + ?,
+                 total_completion_tokens = total_completion_tokens + ?,
+                 status = ?,
+                 cooldown_until = ?,
+                 last_used_at = ?,
+                 last_quota_checked_at = ?,
+                 updated_at = ?
+             WHERE ip_key = ?",
+        )
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(status)
+        .bind(cooldown_until)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .bind(&ovh_key)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
