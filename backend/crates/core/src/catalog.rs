@@ -164,7 +164,35 @@ pub fn model_level_capabilities(
                 Some("auto".to_string()),
             )
         }
-        ProviderKind::Ovh => (Vec::new(), None),
+        ProviderKind::Ovh => {
+            if live_reasoning == Some(false) {
+                return (Vec::new(), None);
+            }
+            let is_reasoning = live_reasoning == Some(true)
+                || {
+                    let lower = base.to_ascii_lowercase();
+                    lower.contains("deepseek")
+                        || lower.contains("thinking")
+                        || lower.contains("reason")
+                        || lower.contains("r1")
+                        || lower.contains("qwq")
+                        || lower.contains("o1")
+                        || lower.contains("o3")
+                        || lower.contains("qwen3.8")
+                        || lower.contains("qwen3.6")
+                        || lower.contains("qwen3.5")
+                        || lower.contains("gemma-4")
+                        || lower.contains("gpt-oss-120b")
+                };
+            if is_reasoning {
+                (
+                    THINKING_LEVEL_NAMES.iter().map(|s| (*s).to_string()).collect(),
+                    Some("auto".to_string()),
+                )
+            } else {
+                (Vec::new(), None)
+            }
+        }
     }
 }
 

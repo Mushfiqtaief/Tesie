@@ -14,6 +14,7 @@ use tesie_proxy::{MihomoController, RelayRequest};
 use tesie_store::{now_ms, Store};
 use tracing::warn;
 
+use crate::opencode::catalog::infer_model_capabilities;
 use crate::opencode::executor::{
     ActiveRequestInfo, AttemptLeg, ProviderRequest, ProviderStreamResponse,
 };
@@ -111,13 +112,19 @@ impl OvhEngine {
             }
         }
 
+        let (_, model_has_reasoning, _, _) =
+            infer_model_capabilities(&parsed.model_id, None, None, None, None);
+        let has_reasoning = model_has_reasoning == Some(true);
+
         let reasoning_level = if let Some(ref eff) = parsed.reasoning_effort {
             apply_thinking_level(target_format, &mut upstream_body, eff, true);
             Some(eff.clone())
-        } else {
+        } else if has_reasoning {
             apply_forced_thinking_level(target_format, &mut upstream_body, &cfg.thinking_level);
             (!cfg.thinking_level.eq_ignore_ascii_case("auto"))
                 .then(|| cfg.thinking_level.clone())
+        } else {
+            None
         };
 
         let body_bytes = encode_opencode_body(&upstream_body, target_format)?;
@@ -422,6 +429,7 @@ impl OvhEngine {
             pending: std::collections::VecDeque<Bytes>,
             finished: bool,
             committed: bool,
+            stream_error: Option<String>,
             store: Store,
             provider_id: String,
             model_id: String,
@@ -447,6 +455,7 @@ impl OvhEngine {
             pending: std::collections::VecDeque::new(),
             finished: false,
             committed: false,
+            stream_error: None,
             store,
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
@@ -499,14 +508,28 @@ impl OvhEngine {
                             None
                         };
 
+                        let is_err = st.stream_error.is_some() || (usage.total_tokens == 0 && usage.emitted_chars == 0);
+                        let final_status = if is_err { 502 } else { 200 };
+                        let err_kind = if st.stream_error.is_some() {
+                            Some("upstream_stream_drop".to_string())
+                        } else if usage.total_tokens == 0 && usage.emitted_chars == 0 {
+                            Some("empty_upstream_stream".to_string())
+                        } else {
+                            None
+                        };
+                        let err_detail = st.stream_error.clone().or_else(|| {
+                            (usage.total_tokens == 0 && usage.emitted_chars == 0)
+                                .then(|| "Upstream closed connection without returning tokens".to_string())
+                        });
+
                         let mut legs = st.prior_legs.clone();
                         legs.push(AttemptLeg {
                             attempt: legs.len() + 1,
                             proxy: st.proxy_name.clone(),
                             egress_ip: st.egress_ip.clone(),
-                            status: 200,
+                            status: final_status,
                             latency_ms,
-                            phase: "ok".into(),
+                            phase: if is_err { "stream_error".into() } else { "ok".into() },
                             model: Some(st.model_id.clone()),
                             wire_model: Some(st.model_id.clone()),
                             reasoning_level: st.reasoning_level.clone(),
@@ -519,27 +542,29 @@ impl OvhEngine {
                                 None
                             },
                             session_id: None,
-                            detail: None,
+                            detail: err_detail.clone(),
                         });
 
-                        // Record success and remaining rate limits into database
-                        let _ = st
-                            .store
-                            .quotas()
-                            .record_ovh_success(
-                                &st.ip_key,
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                                st.remaining_reqs,
-                                st.reset_sec,
-                                now,
-                            )
-                            .await;
+                        if !is_err {
+                            // Record success and remaining rate limits into database
+                            let _ = st
+                                .store
+                                .quotas()
+                                .record_ovh_success(
+                                    &st.ip_key,
+                                    usage.prompt_tokens,
+                                    usage.completion_tokens,
+                                    st.remaining_reqs,
+                                    st.reset_sec,
+                                    now,
+                                )
+                                .await;
 
-                        if let Some(kid) = &st.api_key_id
-                            && usage.total_tokens > 0
-                        {
-                            let _ = st.store.keys().add_usage(kid, usage.total_tokens, now).await;
+                            if let Some(kid) = &st.api_key_id
+                                && usage.total_tokens > 0
+                            {
+                                let _ = st.store.keys().add_usage(kid, usage.total_tokens, now).await;
+                            }
                         }
 
                         let _ = st
@@ -552,7 +577,7 @@ impl OvhEngine {
                                 model: st.model_id.clone(),
                                 proxy_name: st.proxy_name.clone(),
                                 egress_ip: st.egress_ip.clone(),
-                                status_code: 200,
+                                status_code: final_status as i64,
                                 prompt_tokens: usage.prompt_tokens,
                                 cached_tokens: usage.cached_tokens,
                                 completion_tokens: usage.completion_tokens,
@@ -560,8 +585,8 @@ impl OvhEngine {
                                 latency_ms,
                                 ttft_ms,
                                 tokens_per_sec: tps,
-                                error_kind: None,
-                                error_detail: None,
+                                error_kind: err_kind,
+                                error_detail: err_detail,
                                 upstream_url: Some(OVH_CHAT_URL.to_string()),
                                 attempt_count: legs.len() as i64,
                                 attempt_trace: serde_json::to_string(&legs).ok(),
@@ -586,10 +611,12 @@ impl OvhEngine {
                         }
                     }
                     Some(Err(err)) => {
+                        let msg = err.to_string();
                         st.finished = true;
+                        st.stream_error = Some(msg.clone());
                         return Some((
                             Err(TesRouteError::ProxyRelay(format!(
-                                "OVH upstream stream error: {err}"
+                                "OVH upstream stream error: {msg}"
                             ))),
                             st,
                         ));

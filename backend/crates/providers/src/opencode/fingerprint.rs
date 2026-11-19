@@ -974,6 +974,27 @@ pub fn apply_thinking_level(
         return false;
     };
     let level = raw_level.trim().to_ascii_lowercase();
+    if level == "auto" {
+        if overwrite_existing {
+            match target_format {
+                WireFormat::OpenAiChat => {
+                    obj.remove("reasoning_effort");
+                    obj.remove("reasoning");
+                }
+                WireFormat::OpenAiResponses => {
+                    obj.remove("reasoning");
+                    obj.remove("reasoning_effort");
+                }
+                WireFormat::AnthropicMessages => {
+                    obj.remove("thinking");
+                    obj.remove("output_config");
+                    obj.remove("effort");
+                }
+            }
+        }
+        return false;
+    }
+
     if !matches!(
         level.as_str(),
         "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
@@ -1000,7 +1021,12 @@ pub fn apply_thinking_level(
                 obj.remove("reasoning");
                 return false;
             }
-            obj.insert("reasoning_effort".into(), Value::String(level));
+            let wire_level = match level.as_str() {
+                "max" | "xhigh" => "high",
+                "minimal" => "low",
+                other => other,
+            };
+            obj.insert("reasoning_effort".into(), Value::String(wire_level.to_string()));
             true
         }
         WireFormat::OpenAiResponses => {

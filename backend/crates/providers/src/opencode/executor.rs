@@ -1002,11 +1002,15 @@ impl OpenCodeEngine {
             ));
         }
 
+        let (_, model_has_reasoning, _, _) =
+            crate::opencode::catalog::infer_model_capabilities(&parsed.model_id, None, None, None, None);
+        let has_reasoning = model_has_reasoning == Some(true);
+
         let (injected_forced_effort, reasoning_level) = if let Some(effort) = &parsed.reasoning_effort
         {
             let applied = apply_thinking_level(target_format, &mut upstream_body, effort, true);
             (applied, Some(effort.clone()))
-        } else {
+        } else if has_reasoning {
             let applied = apply_forced_thinking_level(
                 target_format,
                 &mut upstream_body,
@@ -1015,6 +1019,8 @@ impl OpenCodeEngine {
             let lvl = (!provider_cfg.thinking_level.eq_ignore_ascii_case("auto"))
                 .then(|| provider_cfg.thinking_level.clone());
             (applied, lvl)
+        } else {
+            (false, None)
         };
 
         normalize_opencode_request_for_lane(&parsed.model_id, &mut upstream_body, target_format);

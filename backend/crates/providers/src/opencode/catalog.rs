@@ -134,7 +134,7 @@ fn infer_model_limits(
     (Some(lim), ctx, out)
 }
 
-fn infer_model_capabilities(
+pub fn infer_model_capabilities(
     id: &str,
     live_attachment: Option<bool>,
     live_reasoning: Option<bool>,
@@ -863,14 +863,14 @@ impl ModelCatalogCache {
                 }
 
                 let prefixed_id = format!("ovh/{}", id);
+                let (attachment, reasoning, modalities, tool_call) =
+                    infer_model_capabilities(&prefixed_id, None, None, None, None);
                 let (supported_levels, default_level) = model_level_capabilities(
                     ProviderKind::Ovh,
                     id,
-                    Some(true),
+                    reasoning,
                     None,
                 );
-                let (attachment, reasoning, modalities, tool_call) =
-                    infer_model_capabilities(&prefixed_id, None, None, None, None);
 
                 let live_limit = if context_length > 0 || max_completion_tokens > 0 {
                     Some(ModelLimitInfo {

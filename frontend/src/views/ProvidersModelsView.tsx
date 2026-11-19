@@ -282,6 +282,23 @@ export function ProvidersModelsView({
   const [maxToks, setMaxToks] = useState("");
   const [sessionTtlHours, setSessionTtlHours] = useState("4");
   const [savingCfg, setSavingCfg] = useState(false);
+  const [isProxyRoutingOpen, setIsProxyRoutingOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const stored = localStorage.getItem("tesie:routing-settings-collapsed");
+    return stored === null ? false : stored === "false";
+  });
+
+  const toggleProxyRouting = () => {
+    setIsProxyRoutingOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("tesie:routing-settings-collapsed", next ? "false" : "true");
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   // Antigravity Connect Modal & OAuth state
   const [connectOpen, setConnectOpen] = useState(false);
@@ -1989,16 +2006,65 @@ export function ProvidersModelsView({
           activeProvider.config.selected_proxy_ids?.length,
         )}`}
         actions={
-          <button
-            type="button"
-            onClick={onOpenProxyPool}
-            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline"
-          >
-            Manage Proxy Pool
-            <ArrowRight className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenProxyPool}
+              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline"
+            >
+              Manage Proxy Pool
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleProxyRouting}
+              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] transition-colors select-none"
+            >
+              <span>{isProxyRoutingOpen ? "Collapse" : "Expand"}</span>
+              {isProxyRoutingOpen ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
         }
       >
+        {!isProxyRoutingOpen ? (
+          <div
+            onClick={toggleProxyRouting}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleProxyRouting();
+              }
+            }}
+            className="group flex cursor-pointer items-center justify-between gap-3 p-4 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-elevated)]/35 transition-colors rounded-xl"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-[var(--text-primary)]">
+                {routingStrategyLabel(currentRoutingStrategy)}
+              </span>
+              <span className="text-[var(--text-muted)]">&middot;</span>
+              <span className="text-[var(--text-secondary)]">
+                {proxyModeLabel(
+                  activeProvider.config.proxy_mode,
+                  activeProvider.config.selected_proxy_ids?.length,
+                )}
+              </span>
+              <span className="text-[var(--text-muted)]">&middot;</span>
+              <span className="text-[11px] text-[var(--text-muted)]">
+                {proxies.filter((p) => p.alive).length} healthy proxies available
+              </span>
+            </div>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] group-hover:underline">
+              Configure routing &amp; nodes
+              <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </div>
+        ) : (
         <form onSubmit={handleSaveConfig} className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/45 p-3.5">
             <div className="min-w-0">
@@ -2118,6 +2184,7 @@ export function ProvidersModelsView({
             </Button>
           </div>
         </form>
+        )}
       </Card>
 
       {/* Provider Model Catalog — Separate Individual Model Cards (4/line Table | 2/line List) */}

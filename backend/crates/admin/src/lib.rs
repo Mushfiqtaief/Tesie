@@ -1778,7 +1778,7 @@ async fn list_providers(
             "auth_type": "none",
             "logo": "/providers/opencode.png",
             "color": "#E56A4A",
-            "description": "Zero-key OpenCode upstream with Bun JA4 TLS impersonation, customizable proxy selection (All / Selected / Direct), configurable IP routing, and queued-until-verified probing.",
+            "description": "Zero-key OpenCode upstream with Bun TLS impersonation and smart proxy routing.",
             "config": oc_cfg,
             "selection_strategy": oc_strategy,
             "routing_strategy": oc_strategy,
