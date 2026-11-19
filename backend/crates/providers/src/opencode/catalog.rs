@@ -26,6 +26,69 @@ pub struct OpenAiModelEntry {
     pub supported_levels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modalities: Option<Vec<String>>,
+}
+
+fn infer_model_capabilities(
+    id: &str,
+    live_attachment: Option<bool>,
+    live_reasoning: Option<bool>,
+    live_modalities: Option<Vec<String>>,
+    live_tool_call: Option<bool>,
+) -> (Option<bool>, Option<bool>, Option<Vec<String>>, Option<bool>) {
+    let lower = id.to_ascii_lowercase();
+    let is_gemini = lower.contains("gemini");
+    let is_claude = lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus");
+    let is_gpt_vis = lower.contains("gpt-4o") || lower.contains("o1") || lower.contains("o3") || lower.contains("gpt-4.5");
+    let is_vl = lower.contains("-vl") || lower.contains("vision") || lower.contains("internvl") || lower.contains("qwen-vl");
+
+    let attachment = live_attachment.or_else(|| {
+        if is_gemini || is_claude || is_gpt_vis || is_vl {
+            Some(true)
+        } else {
+            None
+        }
+    });
+
+    let reasoning = live_reasoning.or_else(|| {
+        if lower.contains("thinking")
+            || lower.contains("reasoning")
+            || lower.contains("reasoner")
+            || lower.contains("r1")
+            || lower.contains("qwq")
+            || lower.contains("o1")
+            || lower.contains("o3")
+            || lower.contains("beam")
+        {
+            Some(true)
+        } else if is_gemini && lower.contains("3.8") {
+            Some(true)
+        } else {
+            None
+        }
+    });
+
+    let modalities = live_modalities.or_else(|| {
+        let mut mods = vec!["text".to_string()];
+        if attachment == Some(true) {
+            mods.push("image".to_string());
+        }
+        if is_gemini || lower.contains("audio") || lower.contains("whisper") {
+            mods.push("audio".to_string());
+        }
+        Some(mods)
+    });
+
+    let tool_call = live_tool_call.or(Some(true));
+
+    (attachment, reasoning, modalities, tool_call)
 }
 
 #[derive(Debug, Default)]
@@ -53,6 +116,8 @@ impl ModelCatalogCache {
         if let Ok(combos) = store.combos().list_enabled().await {
             for c in combos {
                 if seen.insert(c.name.clone()) {
+                    let (attachment, reasoning, modalities, tool_call) =
+                        infer_model_capabilities(&c.name, None, None, None, None);
                     out.push(OpenAiModelEntry {
                         display_name: c.name.clone(),
                         id: c.name,
@@ -61,6 +126,10 @@ impl ModelCatalogCache {
                         owned_by: "combo".to_string(),
                         supported_levels: Vec::new(),
                         default_level: None,
+                        attachment,
+                        reasoning,
+                        modalities,
+                        tool_call,
                     });
                 }
             }
@@ -95,6 +164,8 @@ impl ModelCatalogCache {
                             Some(true),
                             None,
                         );
+                        let (attachment, reasoning, modalities, tool_call) =
+                            infer_model_capabilities(m.id, None, None, None, None);
                         out.push(OpenAiModelEntry {
                             id: m.id.to_string(),
                             object: "model",
@@ -103,6 +174,10 @@ impl ModelCatalogCache {
                             display_name: m.name.to_string(),
                             supported_levels,
                             default_level,
+                            attachment,
+                            reasoning,
+                            modalities,
+                            tool_call,
                         });
                     }
                 }
@@ -162,6 +237,8 @@ impl ModelCatalogCache {
                                 None,
                                 None,
                             );
+                            let (attachment, reasoning, modalities, tool_call) =
+                                infer_model_capabilities(&id, None, None, None, None);
                             out.push(OpenAiModelEntry {
                                 display_name: display_name_for_model(ProviderKind::Antigravity, &id),
                                 id,
@@ -170,6 +247,10 @@ impl ModelCatalogCache {
                                 owned_by: "antigravity".to_string(),
                                 supported_levels,
                                 default_level,
+                                attachment,
+                                reasoning,
+                                modalities,
+                                tool_call,
                             });
                         }
                     }
@@ -182,6 +263,8 @@ impl ModelCatalogCache {
                                 None,
                                 None,
                             );
+                            let (attachment, reasoning, modalities, tool_call) =
+                                infer_model_capabilities(m.id, None, None, None, None);
                             out.push(OpenAiModelEntry {
                                 id: m.id.to_string(),
                                 object: "model",
@@ -190,6 +273,10 @@ impl ModelCatalogCache {
                                 display_name: m.name.to_string(),
                                 supported_levels,
                                 default_level,
+                                attachment,
+                                reasoning,
+                                modalities,
+                                tool_call,
                             });
                         }
                     }
@@ -223,6 +310,8 @@ impl ModelCatalogCache {
                         format!("{}/{}", cp.prefix, m)
                     };
                     if seen.insert(full_id.clone()) {
+                        let (attachment, reasoning, modalities, tool_call) =
+                            infer_model_capabilities(&m, None, None, None, None);
                         out.push(OpenAiModelEntry {
                             id: full_id,
                             object: "model",
@@ -231,6 +320,10 @@ impl ModelCatalogCache {
                             display_name: m,
                             supported_levels: levels.clone(),
                             default_level: Some("auto".to_string()),
+                            attachment,
+                            reasoning,
+                            modalities,
+                            tool_call,
                         });
                     }
                 }
@@ -317,6 +410,18 @@ impl ModelCatalogCache {
                 let is_free = id.to_ascii_lowercase().contains("free") || zero_cost;
                 if is_free && !id.is_empty() {
                     let live_reasoning = m.get("reasoning").and_then(Value::as_bool);
+                    let live_attachment = m.get("attachment").and_then(Value::as_bool);
+                    let live_tool_call = m.get("tool_call").and_then(Value::as_bool);
+                    let live_modalities: Option<Vec<String>> = m
+                        .get("modalities")
+                        .and_then(|mod_val| mod_val.get("input"))
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        });
                     let live_variants: Vec<String> = m
                         .get("variants")
                         .and_then(Value::as_object)
@@ -327,6 +432,13 @@ impl ModelCatalogCache {
                         &id,
                         live_reasoning,
                         (!live_variants.is_empty()).then_some(live_variants.as_slice()),
+                    );
+                    let (attachment, reasoning, modalities, tool_call) = infer_model_capabilities(
+                        &id,
+                        live_attachment,
+                        live_reasoning,
+                        live_modalities,
+                        live_tool_call,
                     );
                     let display_name = m
                         .get("name")
@@ -342,6 +454,10 @@ impl ModelCatalogCache {
                         display_name,
                         supported_levels,
                         default_level,
+                        attachment,
+                        reasoning,
+                        modalities,
+                        tool_call,
                     });
                 }
             }

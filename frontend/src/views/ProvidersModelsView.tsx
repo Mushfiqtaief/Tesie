@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
   AlertCircle,
   Copy,
   ExternalLink,
+  Eye,
   Gauge,
   Globe,
   KeyRound,
@@ -29,11 +31,18 @@ import {
   Sparkles,
   Trash2,
   UserCheck,
+  Volume2,
   Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ProbeSettingsBar } from "../components/ProbeSettingsBar";
+import { ModelCapabilityBadges } from "../components/ModelCapabilityBadges";
+import {
+  getModelCapabilities,
+  getModelCardClasses,
+  getModelChipClasses,
+} from "../utils/modelCapabilities";
 import {
   ProviderProxySelector,
   type ProxySelectionValue,
@@ -545,6 +554,18 @@ export function ProvidersModelsView({
     }
     return map;
   }, [accounts]);
+
+  const modelsEntryMap = useMemo(() => {
+    const map = new Map<string, OpenAiModelEntry>();
+    for (const m of models) {
+      map.set(m.id.toLowerCase(), m);
+      const slash = m.id.indexOf("/");
+      if (slash >= 0) {
+        map.set(m.id.slice(slash + 1).toLowerCase(), m);
+      }
+    }
+    return map;
+  }, [models]);
 
   const providerModels = useMemo(() => {
     if (!activeProvider) return [];
@@ -1710,56 +1731,84 @@ export function ProvidersModelsView({
                     {/* Quota Weekly Pools (Compact, high-contrast visual gauges) */}
                     {(gemWeekly || claudeWeekly) && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 p-2.5">
-                        {gemWeekly && (
-                          <div className="flex items-center justify-between gap-3 px-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0" />
-                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Gemini Weekly Pool</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-300 ${
-                                    Math.round(gemWeekly.remaining_percentage) <= 20
-                                      ? "bg-rose-500"
-                                      : Math.round(gemWeekly.remaining_percentage) <= 50
-                                        ? "bg-amber-400"
-                                        : "bg-blue-400"
-                                  }`}
-                                  style={{ width: `${Math.round(gemWeekly.remaining_percentage)}%` }}
-                                />
+                        {gemWeekly && (() => {
+                          const rawGem = Math.round(gemWeekly.remaining_percentage);
+                          const gemPct = isBanned ? 0 : !acct.enabled ? 0 : rawGem;
+                          return (
+                            <div className="flex items-center justify-between gap-3 px-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-blue-400"}`} />
+                                <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Gemini Weekly Pool</span>
                               </div>
-                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
-                                {Math.round(gemWeekly.remaining_percentage)}%
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                        {claudeWeekly && (
-                          <div className="flex items-center justify-between gap-3 px-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="h-2 w-2 rounded-full bg-purple-400 shrink-0" />
-                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Claude / GPT Pool</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-300 ${
-                                    Math.round(claudeWeekly.remaining_percentage) <= 20
-                                      ? "bg-rose-500"
-                                      : Math.round(claudeWeekly.remaining_percentage) <= 50
-                                        ? "bg-amber-400"
-                                        : "bg-purple-400"
-                                  }`}
-                                  style={{ width: `${Math.round(claudeWeekly.remaining_percentage)}%` }}
-                                />
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-300 ${
+                                      isBanned
+                                        ? "bg-rose-500/40"
+                                        : !acct.enabled
+                                          ? "bg-zinc-600"
+                                          : gemPct <= 20
+                                            ? "bg-rose-500"
+                                            : gemPct <= 50
+                                              ? "bg-amber-400"
+                                              : "bg-blue-400"
+                                    }`}
+                                    style={{ width: `${gemPct}%` }}
+                                  />
+                                </div>
+                                <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                  {isBanned ? (
+                                    <span className="text-rose-400">0%</span>
+                                  ) : !acct.enabled ? (
+                                    <span className="text-[var(--text-muted)]">0%</span>
+                                  ) : (
+                                    `${gemPct}%`
+                                  )}
+                                </span>
                               </div>
-                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
-                                {Math.round(claudeWeekly.remaining_percentage)}%
-                              </span>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
+                        {claudeWeekly && (() => {
+                          const rawClaude = Math.round(claudeWeekly.remaining_percentage);
+                          const claudePct = isBanned ? 0 : !acct.enabled ? 0 : rawClaude;
+                          return (
+                            <div className="flex items-center justify-between gap-3 px-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-purple-400"}`} />
+                                <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Claude / GPT Pool</span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-300 ${
+                                      isBanned
+                                        ? "bg-rose-500/40"
+                                        : !acct.enabled
+                                          ? "bg-zinc-600"
+                                          : claudePct <= 20
+                                            ? "bg-rose-500"
+                                            : claudePct <= 50
+                                              ? "bg-amber-400"
+                                              : "bg-purple-400"
+                                    }`}
+                                    style={{ width: `${claudePct}%` }}
+                                  />
+                                </div>
+                                <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                  {isBanned ? (
+                                    <span className="text-rose-400">0%</span>
+                                  ) : !acct.enabled ? (
+                                    <span className="text-[var(--text-muted)]">0%</span>
+                                  ) : (
+                                    `${claudePct}%`
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
@@ -1782,39 +1831,61 @@ export function ProvidersModelsView({
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                           {visibleModels.map((mq) => {
-                            const pct = Math.max(0, Math.min(100, Math.round(mq.remaining_percentage)));
+                            const rawPct = Math.max(0, Math.min(100, Math.round(mq.remaining_percentage)));
+                            const isInactive = isBanned || !acct.enabled;
+                            const pct = isInactive ? 0 : rawPct;
                             const mc = cooldownMap.get(mq.model);
                             const coolUntil = mq.failure_cooldown_until ?? mc?.cooldown_until ?? null;
                             const failCount = mq.failure_count ?? mc?.consecutive_failures ?? 0;
-                            const modelCooling = !!coolUntil && coolUntil > nowMs;
-                            const pctColor =
-                              pct <= 0
-                                ? "text-rose-400 font-semibold"
-                                : modelCooling
-                                  ? "text-amber-400 font-semibold"
-                                  : pct <= 35
+                            const modelCooling = !isInactive && !!coolUntil && coolUntil > nowMs;
+                            const chipCaps = getModelCapabilities(mq.model, modelsEntryMap.get(mq.model.toLowerCase()));
+
+                            let chipClass = "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50";
+                            if (isBanned) {
+                              chipClass = "border-rose-500/25 bg-rose-500/5 opacity-65";
+                            } else if (!acct.enabled) {
+                              chipClass = "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/25 opacity-55";
+                            } else if (modelCooling) {
+                              chipClass = "border-amber-500/30 bg-amber-500/10";
+                            } else {
+                              chipClass = getModelChipClasses(chipCaps);
+                            }
+
+                            const pctColor = isBanned
+                              ? "text-rose-400/80 font-medium line-through"
+                              : !acct.enabled
+                                ? "text-[var(--text-muted)] line-through"
+                                : pct <= 0
+                                  ? "text-rose-400 font-semibold"
+                                  : modelCooling
                                     ? "text-amber-400 font-semibold"
-                                    : "text-emerald-400 font-medium";
+                                    : pct <= 35
+                                      ? "text-amber-400 font-semibold"
+                                      : "text-emerald-400 font-medium";
 
                             return (
                               <div
                                 key={mq.model}
-                                className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
-                                  modelCooling
-                                    ? "border-amber-500/30 bg-amber-500/10"
-                                    : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50"
-                                }`}
+                                className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${chipClass}`}
                               >
-                                <span className="truncate font-medium text-[var(--text-primary)]" title={mq.display_name || mq.model}>
-                                  {mq.display_name || mq.model}
-                                </span>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span
+                                    className={`truncate font-medium ${isInactive ? "text-[var(--text-muted)] line-through" : "text-[var(--text-primary)]"}`}
+                                    title={mq.display_name || mq.model}
+                                  >
+                                    {mq.display_name || mq.model}
+                                  </span>
+                                  {!isInactive && <ModelCapabilityBadges caps={chipCaps} compact />}
+                                </div>
                                 <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] tabular-nums">
                                   {modelCooling && (
                                     <span className="text-amber-400">
                                       ({failCount}f · {formatCountdown(coolUntil, nowMs)})
                                     </span>
                                   )}
-                                  <span className={pctColor}>{pct}%</span>
+                                  <span className={pctColor}>
+                                    {isBanned ? "banned" : !acct.enabled ? "disabled" : `${pct}%`}
+                                  </span>
                                 </div>
                               </div>
                             );
@@ -2078,7 +2149,45 @@ export function ProvidersModelsView({
           </div>
         }
       >
-        <div className="bg-[var(--bg-elevated)]/25 p-4">
+        <div className="bg-[var(--bg-elevated)]/25 p-4 space-y-3">
+          {/* Visual Capability Legend */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/75 px-3.5 py-2.5 text-xs text-[var(--text-secondary)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-semibold text-[var(--text-primary)]">Card Accents:</span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-3 w-1 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.7)]" />
+                <Eye className="h-3.5 w-3.5 text-sky-400" />
+                <span className="text-sky-400 font-medium">Half Blue (Left)</span>
+                <span className="text-[var(--text-muted)]">= Vision</span>
+              </span>
+              <span className="text-[var(--border-subtle)]">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-3 w-1 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.7)]" />
+                <Brain className="h-3.5 w-3.5 text-amber-400" />
+                <span className="text-amber-400 font-medium">Half Orange (Right)</span>
+                <span className="text-[var(--text-muted)]">= Thinking</span>
+              </span>
+              <span className="text-[var(--border-subtle)]">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="flex items-center gap-0.5">
+                  <span className="h-3 w-1 rounded-l-full bg-sky-500" />
+                  <span className="h-3 w-1 rounded-r-full bg-amber-500" />
+                </span>
+                <span className="text-[var(--text-primary)] font-medium">Split Blue & Orange</span>
+                <span className="text-[var(--text-muted)]">= Dual Support</span>
+              </span>
+              <span className="text-[var(--border-subtle)]">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="text-emerald-400 font-medium">Green Badge</span>
+                <span className="text-[var(--text-muted)]">= Audio</span>
+              </span>
+            </div>
+            <div className="font-mono text-[11px] text-[var(--text-muted)]">
+              Showing {filteredModels.length} of {providerModels.length} models
+            </div>
+          </div>
+
           <div
             className={`grid gap-2.5 ${
               modelsViewMode === "list"
@@ -2094,14 +2203,19 @@ export function ProvidersModelsView({
                 ? agModelStateMap.get(modelSlug.toLowerCase())
                 : undefined;
               const isLockedForUser = Boolean(isAntigravity && agState && !agState.unlocked);
+              const modelEntry =
+                modelsEntryMap.get(fullSpec.toLowerCase()) ||
+                modelsEntryMap.get(modelSlug.toLowerCase());
+              const caps = getModelCapabilities(fullSpec, modelEntry);
+              const cardAccents = getModelCardClasses(caps);
 
               return (
                 <div
                   key={fullSpec}
-                  className={`group flex items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-3 transition-[border-color,background-color] duration-150 ${
+                  className={`group relative overflow-hidden flex flex-col justify-between gap-2.5 rounded-xl px-3.5 py-3 transition-[border-color,background-color,box-shadow] duration-200 ${cardAccents} ${
                     isLockedForUser
                       ? "opacity-45 grayscale"
-                      : "hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]/45"
+                      : ""
                   }`}
                   title={
                     isLockedForUser
@@ -2109,28 +2223,32 @@ export function ProvidersModelsView({
                       : fullSpec
                   }
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 space-y-1.5">
                     <div className="truncate font-mono text-[13px]" title={fullSpec}>
                       {prefix && <span className="text-[var(--text-muted)]">{prefix}</span>}
                       <span className="font-medium text-[var(--text-primary)]">{modelSlug}</span>
                     </div>
-                    {(isLockedForUser || agState) && (
-                      <div className="mt-0.5 text-[11px]">
-                        {isLockedForUser ? (
-                          <span className="inline-flex items-center gap-1 text-[var(--text-muted)]">
-                            <Lock className="h-3 w-3" />
-                            Not unlocked
-                          </span>
-                        ) : agState ? (
-                          <span className="font-mono text-[var(--success)] tabular-nums">
-                            {Math.round(agState.maxRemaining)}% left
-                          </span>
-                        ) : null}
-                      </div>
-                    )}
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <ModelCapabilityBadges caps={caps} />
+                      {(isLockedForUser || agState) && (
+                        <div className="text-[11px]">
+                          {isLockedForUser ? (
+                            <span className="inline-flex items-center gap-1 text-[var(--text-muted)]">
+                              <Lock className="h-3 w-3" />
+                              Not unlocked
+                            </span>
+                          ) : agState ? (
+                            <span className="font-mono text-[var(--success)] tabular-nums">
+                              {Math.round(agState.maxRemaining)}% left
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  <div className="flex shrink-0 items-center justify-end gap-1 border-t border-[var(--border-subtle)]/40 pt-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                     <button
                       type="button"
                       onClick={() => copyText(fullSpec, fullSpec)}

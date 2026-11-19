@@ -666,6 +666,10 @@ export interface OpenAiModelEntry {
   display_name?: string;
   supported_levels?: string[];
   default_level?: string | null;
+  attachment?: boolean;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  modalities?: string[];
 }
 
 export interface ApiKeyView {
