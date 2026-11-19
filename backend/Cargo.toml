@@ -19,6 +19,7 @@ authors = ["Tesie"]
 
 [workspace.dependencies]
 anyhow = "1.0"
+argon2 = "0.5"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"

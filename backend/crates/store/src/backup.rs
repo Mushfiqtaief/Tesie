@@ -65,11 +65,10 @@ impl BackupRepo {
     pub async fn export_backup(&self, include_secrets: bool) -> Result<Value> {
         let settings_repo = SettingsRepo::new(self.pool.clone());
         let settings = settings_repo.get_settings().await?;
-        let admin_password = if include_secrets {
-            settings_repo.get_admin_password().await?
-        } else {
-            None
-        };
+        // The dashboard credential is never written into a backup, even a full one: it is a
+        // local gate on this instance, and a backup file travels. Restoring one leaves the
+        // target instance's existing password (or lack of one) untouched.
+        let admin_password: Option<String> = None;
         let token_saver_config = TokenSaverRepo::new(self.pool.clone()).get_config().await?;
         let provider_configs = ProviderConfigsRepo::new(self.pool.clone())
             .list_configs()

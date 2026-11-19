@@ -1,0 +1,111 @@
+name: Publish Docker image
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY_IMAGE: ghcr.io/mushfiqtaief/tesie
+
+jobs:
+  # The tag list is derived from the ref and nothing else, so what you tag is
+  # exactly what gets published:
+  #
+  #   v0.2.0        -> latest, 0.2, 0.2.0
+  #   v0.2.0-rc.1   -> exp, 0.2-rc, 0.2.0-rc.1
+  #   push to main  -> sha-<short>
+  #   manual run    -> sha-<short>
+  #
+  # A stable tag moves `latest`; a prerelease tag moves `exp` only, so a
+  # pre-release never becomes what a `docker pull` resolves to.
+  channel:
+    name: Resolve image tags
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.resolve.outputs.tags }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Compute tags
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            case "$VERSION" in
+              *-*)
+                # Pre-release. The identifier before the first dash names the channel
+                # (`-exp.1` -> exp, `-rc.1` -> rc), so the floating tag always matches
+                # the kind of build it points at. CORE%.* drops the patch.
+                CORE="${VERSION%%-*}"
+                CHANNEL="${VERSION#*-}"
+                CHANNEL="${CHANNEL%%.*}"
+                TAGS="$CHANNEL ${CORE%.*}-$CHANNEL $VERSION"
+                ;;
+              *)
+                TAGS="latest ${VERSION%.*} ${VERSION}"
+                ;;
+            esac
+          else
+            VERSION="sha-${GITHUB_SHA::7}"
+            TAGS="$VERSION"
+          fi
+
+          {
+            echo "tags<<EOF"
+            for t in $TAGS; do echo "type=raw,value=$t"; done
+            echo "EOF"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "version: $VERSION"
+          echo "tags:    $TAGS"
+
+  docker:
+    name: Build and push
+    needs: channel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: ${{ needs.channel.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Tesie
+            org.opencontainers.image.description=AI routing gateway with per-IP proxy pool and quota tracking
+            org.opencontainers.image.version=${{ needs.channel.outputs.version }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,31 @@
+# Build outputs and dependency caches — always rebuilt inside the image
+backend/target
+frontend/node_modules
+frontend/dist
+mihomo/bin
+
+# Local runtime state and databases
+.data
+*.db
+*.db-shm
+*.db-wal
+
+# VCS / editor
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Docs and screenshots do not affect the build
+docs
+*.md
+!README.md
+*.png
+*.jpg
+*.jpeg
+
+# Local env / secrets
+.env
+.env.*

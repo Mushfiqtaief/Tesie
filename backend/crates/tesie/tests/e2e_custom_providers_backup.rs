@@ -161,6 +161,7 @@ async fn e2e_custom_provider_streaming_round_robin_backup_and_security() {
             require_api_key: false,
             fetch_live_models: false,
             frontend_dir: None,
+            ..Default::default()
         },
     );
 

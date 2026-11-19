@@ -351,3 +351,105 @@ async fn quotas_respect_selected_proxy_config() {
     assert_eq!(scoped[0].proxies, vec![p1.name]);
     assert_ne!(scoped[0].quota.ip_key, p2.ip_key());
 }
+
+#[tokio::test]
+async fn admin_password_is_hashed_and_verifiable() {
+    let store = Store::connect_in_memory().await.unwrap();
+    store
+        .settings()
+        .set_admin_password(Some("correct horse battery staple"))
+        .await
+        .unwrap();
+
+    let stored = store.settings().get_admin_password().await.unwrap().unwrap();
+    assert!(
+        stored.starts_with("$argon2id$"),
+        "password must be stored as an Argon2id PHC string, got {stored}"
+    );
+    assert!(!stored.contains("correct horse"));
+
+    assert!(
+        store
+            .settings()
+            .verify_admin_password("correct horse battery staple")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .settings()
+            .verify_admin_password("wrong password")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn legacy_plaintext_password_verifies_and_is_upgraded_in_place() {
+    let store = Store::connect_in_memory().await.unwrap();
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('admin_password', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind("hunter2")
+    .bind(now_ms())
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        store
+            .settings()
+            .verify_admin_password("hunter2")
+            .await
+            .unwrap()
+    );
+
+    let stored = store.settings().get_admin_password().await.unwrap().unwrap();
+    assert!(
+        stored.starts_with("$argon2id$"),
+        "plaintext row should be re-hashed after a successful unlock, got {stored}"
+    );
+    assert!(
+        store
+            .settings()
+            .verify_admin_password("hunter2")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn verify_admin_password_is_false_when_unset() {
+    let store = Store::connect_in_memory().await.unwrap();
+    assert!(
+        !store
+            .settings()
+            .verify_admin_password("")
+            .await
+            .unwrap()
+    );
+    assert!(!store.settings().has_admin_password().await.unwrap());
+}
+
+#[tokio::test]
+async fn backup_never_contains_the_admin_credential() {
+    let store = Store::connect_in_memory().await.unwrap();
+    store
+        .settings()
+        .set_admin_password(Some("super-secret-dashboard-pw"))
+        .await
+        .unwrap();
+
+    let full = store.backup().export_backup(true).await.unwrap();
+    let full_text = full.to_string();
+    assert!(
+        full["settings"]["admin_password"].is_null(),
+        "full backup must not carry the admin credential"
+    );
+    assert!(!full_text.contains("super-secret-dashboard-pw"));
+    assert!(!full_text.contains("$argon2"));
+
+    let sanitized = store.backup().export_backup(false).await.unwrap();
+    assert!(sanitized["settings"]["admin_password"].is_null());
+}

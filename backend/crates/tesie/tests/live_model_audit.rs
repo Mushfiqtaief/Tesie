@@ -75,6 +75,7 @@ async fn audit_every_listed_model_end_to_end() {
             require_api_key: false,
             fetch_live_models: true,
             frontend_dir: None,
+            ..Default::default()
         },
     );
 

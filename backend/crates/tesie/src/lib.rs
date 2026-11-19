@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
-use tesie_admin::{admin_router, AdminState};
+use tesie_admin::{admin_router, AdminState, AuthAttemptLimiter};
 use tesie_gateway::{gateway_router, GatewayState};
 use tesie_providers::{ModelCatalogCache, OpenCodeEngine};
 use tesie_proxy::MihomoController;
@@ -24,6 +24,9 @@ pub struct AppOptions {
     pub require_api_key: bool,
     pub fetch_live_models: bool,
     pub frontend_dir: Option<PathBuf>,
+    /// Reject admin requests outright while no credential is configured, instead of
+    /// serving them unauthenticated. The container image enables this.
+    pub require_admin_auth: bool,
 }
 
 impl Default for AppOptions {
@@ -33,6 +36,7 @@ impl Default for AppOptions {
             require_api_key: false,
             fetch_live_models: true,
             frontend_dir: None,
+            require_admin_auth: false,
         }
     }
 }
@@ -60,6 +64,8 @@ pub fn build_app_router(
         zen_base_url: engine.config().zen_base_url.clone(),
         fetch_live_models: opts.fetch_live_models,
         admin_token: opts.admin_token,
+        require_admin_auth: opts.require_admin_auth,
+        auth_limiter: Arc::new(AuthAttemptLimiter::default()),
     };
 
     let mut router = Router::new()

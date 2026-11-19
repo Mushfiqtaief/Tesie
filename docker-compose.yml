@@ -1,0 +1,22 @@
+services:
+  tesie:
+    image: ghcr.io/mushfiqtaief/tesie:latest
+    # To build from this checkout instead of pulling, replace the line above with:
+    # build: .
+    container_name: tesie
+    ports:
+      - "20129:20129"
+    volumes:
+      - tesie-data:/data
+    environment:
+      # REQUIRED. The image runs with TESIE_REQUIRE_ADMIN_AUTH=1, so it refuses to
+      # start until a credential exists. Generate one with:
+      #   openssl rand -base64 32
+      - ADMIN_TOKEN=${ADMIN_TOKEN:?set ADMIN_TOKEN in .env or the shell before starting}
+      - PORT=20129
+      - TESIE_REQUIRE_ADMIN_AUTH=1
+      - RUST_LOG=info
+    restart: unless-stopped
+
+volumes:
+  tesie-data:

@@ -403,6 +403,7 @@ async fn e2e_opencode_multi_ip_proxy_quota_and_failover() {
             require_api_key: false,
             fetch_live_models: false,
             frontend_dir: None,
+            ..Default::default()
         },
     );
 

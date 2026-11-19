@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use serde_json::Value;
@@ -64,6 +64,17 @@ struct Cli {
     #[arg(long, env = "ADMIN_TOKEN")]
     admin_token: Option<String>,
 
+    /// Refuse to serve the admin API while no credential is configured. Enabled in the
+    /// container image so a Docker deployment is never accidentally wide open.
+    #[arg(
+        long,
+        env = "TESIE_REQUIRE_ADMIN_AUTH",
+        default_value_t = false,
+        action = clap::ArgAction::Set,
+        value_parser = parse_boolish
+    )]
+    require_admin_auth: bool,
+
     #[arg(long, env = "REQUIRE_API_KEY", default_value_t = false)]
     require_api_key: bool,
 
@@ -121,6 +132,15 @@ impl Cli {
             || matches!(self.command, Some(TesieCommand::Serve))
             || (self.command.is_none()
                 && (self.import_proxies_only.is_some() || self.list_socks4))
+    }
+}
+
+/// Accepts the spellings people actually put in a compose file or shell export.
+fn parse_boolish(raw: &str) -> std::result::Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(format!("expected true/false, got '{other}'")),
     }
 }
 
@@ -502,6 +522,8 @@ async fn main() -> Result<()> {
                         println!("Tesie · Offline");
                         println!("  Data Dir    {}", data_dir.display());
                         println!("  Tip         Run `tesie` to wake up the background daemon.");
+                        // Non-zero so this doubles as a health probe in scripts/containers.
+                        std::process::exit(1);
                     }
                 }
                 return Ok(());
@@ -602,6 +624,28 @@ async fn main() -> Result<()> {
     let bin_path = resolve_core_bin(cli.core_bin, &data_dir);
     let ctl_secret = cli.core_secret.unwrap_or_else(generate_secret);
 
+    // Fail before spawning TesieCore so a misconfigured container exits immediately
+    // instead of sitting up with a wide-open admin panel.
+    if cli.require_admin_auth {
+        let has_env_token = cli
+            .admin_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty());
+        let has_password = store
+            .settings()
+            .has_admin_password()
+            .await
+            .unwrap_or(false);
+        if !has_env_token && !has_password {
+            bail!(
+                "TESIE_REQUIRE_ADMIN_AUTH is enabled but no admin credential is configured.\n\
+                 Set ADMIN_TOKEN in the environment (docker run -e ADMIN_TOKEN=...) or set a\n\
+                 dashboard password first, then start again."
+            );
+        }
+    }
+
     info!(
         core_bin = %bin_path.display(),
         ctl_addr = %cli.core_ctl_addr,
@@ -655,6 +699,7 @@ async fn main() -> Result<()> {
             require_api_key: cli.require_api_key,
             fetch_live_models: true,
             frontend_dir,
+            require_admin_auth: cli.require_admin_auth,
         },
     );
 

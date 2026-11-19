@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use argon2::password_hash::{rand_core::OsRng, PasswordHash, SaltString};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use tesie_core::{GatewaySettings, Result};
+use tesie_core::{GatewaySettings, Result, TesRouteError};
 
 use crate::{map_sqlx_err, now_ms};
 
@@ -172,6 +174,9 @@ impl SettingsRepo {
         Ok(updated)
     }
 
+    /// Returns the stored credential row verbatim. Callers that need to compare against a
+    /// user-supplied secret must go through [`verify_admin_password`] instead — the value may
+    /// be an Argon2id PHC string, and legacy installs may still hold a plaintext password.
     pub async fn get_admin_password(&self) -> Result<Option<String>> {
         let row = sqlx::query("SELECT value FROM settings WHERE key = 'admin_password'")
             .fetch_optional(&self.pool)
@@ -183,11 +188,18 @@ impl SettingsRepo {
             .filter(|s| !s.is_empty()))
     }
 
+    pub async fn has_admin_password(&self) -> Result<bool> {
+        Ok(self.get_admin_password().await?.is_some())
+    }
+
     pub async fn set_admin_password(&self, password: Option<&str>) -> Result<()> {
         let now = now_ms();
         let clean = password.map(str::trim).filter(|s| !s.is_empty());
         match clean {
-            Some(pw) => self.set_raw("admin_password", pw, now).await,
+            Some(pw) => {
+                self.set_raw("admin_password", &hash_admin_password(pw)?, now)
+                    .await
+            }
             None => {
                 sqlx::query("DELETE FROM settings WHERE key = 'admin_password'")
                     .execute(&self.pool)
@@ -196,6 +208,28 @@ impl SettingsRepo {
                 Ok(())
             }
         }
+    }
+
+    /// Constant-time check of a candidate against the stored credential.
+    ///
+    /// Legacy plaintext rows are compared in constant time and then re-hashed in place, so a
+    /// successful unlock is the last time that password exists in cleartext on disk.
+    pub async fn verify_admin_password(&self, candidate: &str) -> Result<bool> {
+        let Some(stored) = self.get_admin_password().await? else {
+            return Ok(false);
+        };
+
+        if !stored.starts_with("$argon2") {
+            if !ct_eq(stored.as_bytes(), candidate.as_bytes()) {
+                return Ok(false);
+            }
+            let _ = self
+                .set_raw("admin_password", &hash_admin_password(candidate)?, now_ms())
+                .await;
+            return Ok(true);
+        }
+
+        Ok(verify_phc(&stored, candidate))
     }
 
     async fn set_raw(&self, key: &str, value: &str, now: i64) -> Result<()> {
@@ -211,4 +245,33 @@ impl SettingsRepo {
         .map_err(map_sqlx_err)?;
         Ok(())
     }
+}
+
+/// Argon2id with the crate defaults (m=19456 KiB, t=2, p=1), a fresh random salt per call.
+pub fn hash_admin_password(password: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| TesRouteError::BadRequest(format!("failed to hash admin password: {e}")))
+}
+
+fn verify_phc(phc: &str, candidate: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(phc) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(candidate.as_bytes(), &parsed)
+        .is_ok()
+}
+
+/// Branch-free comparison so a legacy plaintext credential cannot be recovered by timing.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }

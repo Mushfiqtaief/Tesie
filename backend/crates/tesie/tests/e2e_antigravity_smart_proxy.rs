@@ -435,6 +435,7 @@ async fn e2e_antigravity_smart_proxy_partition_sticky_and_fallback() {
             require_api_key: false,
             fetch_live_models: false,
             frontend_dir: None,
+            ..Default::default()
         },
     );
 

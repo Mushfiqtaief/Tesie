@@ -43,6 +43,11 @@ pub struct AdminState {
     pub zen_base_url: String,
     pub fetch_live_models: bool,
     pub admin_token: Option<String>,
+    /// When true, requests are rejected while no credential is configured, instead of
+    /// falling through to wide-open access. The container image sets this.
+    pub require_admin_auth: bool,
+    /// Failed-unlock tracking, keyed by client IP.
+    pub auth_limiter: Arc<AuthAttemptLimiter>,
 }
 
 pub fn admin_router(state: AdminState) -> Router {
@@ -185,64 +190,233 @@ fn extract_provided_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-async fn resolve_expected_admin_secret(state: &AdminState) -> (Option<String>, bool, bool) {
-    if let Some(env_tok) = state
-        .admin_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return (Some(env_tok.to_string()), true, false);
-    }
-    let db_pw = state
-        .store
-        .settings()
-        .get_admin_password()
-        .await
-        .ok()
-        .flatten()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let has_pw = db_pw.is_some();
-    (db_pw, false, has_pw)
+const MAX_FAILED_UNLOCK_ATTEMPTS: u32 = 5;
+const UNLOCK_LOCKOUT_MS: i64 = 60_000;
+
+/// In-memory failed-unlock tracker. Keyed by client address so one attacker cannot consume
+/// the attempts of another, and pruned on every check so it cannot grow without bound.
+///
+/// Semantics: the first `MAX_FAILED_UNLOCK_ATTEMPTS` bad credentials each get a plain 401.
+/// Once that many have been recorded, every further attempt from the same client — including
+/// one carrying the correct credential — is refused until the lockout window expires.
+#[derive(Default)]
+pub struct AuthAttemptLimiter {
+    inner: std::sync::Mutex<std::collections::HashMap<String, AttemptWindow>>,
 }
 
+#[derive(Clone, Copy)]
+struct AttemptWindow {
+    failures: u32,
+    window_started_at: i64,
+    seen_at: i64,
+}
+
+impl AuthAttemptLimiter {
+    /// Returns the remaining lockout in milliseconds, or 0 when the caller may try again.
+    pub fn retry_after_ms(&self, key: &str) -> i64 {
+        let now = now_ms();
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.retain(|_, w| now - w.seen_at < UNLOCK_LOCKOUT_MS);
+
+        let Some(w) = guard.get_mut(key) else {
+            return 0;
+        };
+        if w.failures < MAX_FAILED_UNLOCK_ATTEMPTS {
+            return 0;
+        }
+        let elapsed = now - w.window_started_at;
+        if elapsed >= UNLOCK_LOCKOUT_MS {
+            // Window expired: forget the failures so the client starts clean.
+            guard.remove(key);
+            return 0;
+        }
+        UNLOCK_LOCKOUT_MS - elapsed
+    }
+
+    pub fn record_failure(&self, key: &str) {
+        let now = now_ms();
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let window = guard.entry(key.to_string()).or_insert(AttemptWindow {
+            failures: 0,
+            window_started_at: now,
+            seen_at: now,
+        });
+        if now - window.window_started_at >= UNLOCK_LOCKOUT_MS {
+            window.failures = 0;
+            window.window_started_at = now;
+        }
+        window.failures = window.failures.saturating_add(1);
+        window.seen_at = now;
+    }
+
+    pub fn record_success(&self, key: &str) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.remove(key);
+        }
+    }
+}
+
+fn client_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Resolves the credential the request must present: the env token wins, then the stored
+/// dashboard password. `require_admin_auth` decides what happens when neither exists.
 async fn require_admin_auth(
     State(state): State<AdminState>,
     headers: HeaderMap,
     req: Request,
     next: Next,
 ) -> std::result::Result<Response, Response> {
+    // The status probe must stay reachable so the SPA can tell "locked" from "offline".
     if req.uri().path().ends_with("/auth/status") {
         return Ok(next.run(req).await);
     }
 
-    let (expected, _, _) = resolve_expected_admin_secret(&state).await;
-    let Some(expected) = expected.as_deref() else {
+    let provided = extract_provided_token(&headers);
+    let key = client_key(&headers);
+
+    let env_token = state
+        .admin_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let password_set = state
+        .store
+        .settings()
+        .has_admin_password()
+        .await
+        .unwrap_or(false);
+
+    if env_token.is_none() && !password_set {
+        if state.require_admin_auth {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "admin auth is required but no ADMIN_TOKEN or dashboard password is configured"
+                })),
+            )
+                .into_response());
+        }
         return Ok(next.run(req).await);
+    }
+
+    let retry_after = state.auth_limiter.retry_after_ms(&key);
+    if retry_after > 0 {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "too many failed unlock attempts, try again shortly",
+                "retry_after_ms": retry_after,
+            })),
+        )
+            .into_response());
+    }
+
+    let Some(provided) = provided else {
+        return Err(unauthorized());
     };
 
-    if extract_provided_token(&headers) == Some(expected) {
-        Ok(next.run(req).await)
-    } else {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized admin request" })),
-        )
-            .into_response())
+    // The env token short-circuits password verification, but a mismatch must still be
+    // counted so an attacker cannot probe credentials for free.
+    if let Some(expected) = env_token
+        && ct_eq_str(expected, provided)
+    {
+        state.auth_limiter.record_success(&key);
+        return Ok(next.run(req).await);
     }
+
+    if password_set
+        && state
+            .store
+            .settings()
+            .verify_admin_password(provided)
+            .await
+            .unwrap_or(false)
+    {
+        state.auth_limiter.record_success(&key);
+        return Ok(next.run(req).await);
+    }
+
+    // Record the failure, then reject. The next request from this client is gated by the
+    // `retry_after_ms` check above, so a client gets exactly MAX plain rejections.
+    state.auth_limiter.record_failure(&key);
+    Err(unauthorized())
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized admin request" })),
+    )
+        .into_response()
+}
+
+/// Length-checked, branch-free string comparison for the env token path.
+fn ct_eq_str(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 async fn get_auth_status(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> std::result::Result<Json<Value>, Response> {
-    let (expected, env_token_active, password_set) = resolve_expected_admin_secret(&state).await;
-    let protected = expected.is_some();
-    let authenticated = match expected.as_deref() {
-        Some(secret) => extract_provided_token(&headers) == Some(secret),
-        None => true,
+    let env_token_active = state
+        .admin_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let password_set = state
+        .store
+        .settings()
+        .has_admin_password()
+        .await
+        .unwrap_or(false);
+    let protected = env_token_active || password_set || state.require_admin_auth;
+
+    let provided = extract_provided_token(&headers);
+    let authenticated = if !protected {
+        true
+    } else {
+        let env_match = state
+            .admin_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .zip(provided)
+            .is_some_and(|(expected, given)| ct_eq_str(expected, given));
+        env_match
+            || match provided {
+                Some(given) if password_set => state
+                    .store
+                    .settings()
+                    .verify_admin_password(given)
+                    .await
+                    .unwrap_or(false),
+                _ => false,
+            }
     };
+
     Ok(Json(json!({
         "protected": protected,
         "authenticated": authenticated,
@@ -2680,7 +2854,17 @@ async fn build_settings_payload(state: &AdminState) -> std::result::Result<Value
         .get_settings()
         .await
         .map_err(err_resp)?;
-    let (_, env_token_active, has_admin_password) = resolve_expected_admin_secret(state).await;
+    let env_token_active = state
+        .admin_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let has_admin_password = state
+        .store
+        .settings()
+        .has_admin_password()
+        .await
+        .unwrap_or(false);
     let data_dir = data_dir_from_state(state);
     let db_path = data_dir.join("tesie.db");
     let db_size_bytes = compute_db_size_bytes(&data_dir);
