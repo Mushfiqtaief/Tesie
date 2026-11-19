@@ -28,7 +28,7 @@ export function getModelCapabilities(
   const hasThinking = Boolean(
     entry?.reasoning === true ||
     (entry?.supported_levels && entry.supported_levels.length > 0) ||
-    /thinking|reasoning|reasoner|r1|qwq|o1|o3|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5/i.test(
+    /thinking|reasoning|reasoner|r1|qwq|o1|o3|o4|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5|gemini-3|gemini-2\.5|claude-opus|opus-4|sonnet-4|claude-3\.7|claude-3-7/i.test(
       modelSlug,
     )
   );

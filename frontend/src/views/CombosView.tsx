@@ -555,9 +555,9 @@ export function CombosView({
     if (alreadySingleAdded) return false;
 
     if (pickerCategory === "vision") {
-      if (!getModelCapabilities(meta.prefixedId).hasVision) return false;
+      if (!getModelCapabilities(meta.prefixedId, meta.entry).hasVision) return false;
     } else if (pickerCategory === "thinking") {
-      if (!getModelCapabilities(meta.prefixedId).hasThinking) return false;
+      if (!getModelCapabilities(meta.prefixedId, meta.entry).hasThinking) return false;
     } else if (pickerCategory !== "all") {
       const matchProvider =
         meta.providerId === pickerCategory ||
@@ -720,7 +720,7 @@ export function CombosView({
                       const meta = catalogEntries.map.get(parsed.baseModel);
                       const warning = validateChainEntry(parsed.baseModel, parsed.level);
                       const friendlyName = meta?.displayName || parsed.baseModel;
-                      const caps = getModelCapabilities(parsed.baseModel);
+                      const caps = getModelCapabilities(parsed.baseModel, meta?.entry);
                       const limits = getModelLimits(parsed.baseModel, meta?.entry);
                       const chipStyle = getModelChipClasses(caps);
                       const provLogo = meta?.providerLogo || getProviderLogo(parsed.baseModel);
@@ -881,7 +881,7 @@ export function CombosView({
                   const hasMultipleLevels = supportedLevels.length > 0;
                   const warning = validateChainEntry(item.baseModel, item.level);
                   const wireSpec = formatComboModelSpec(item.baseModel, item.level);
-                  const caps = getModelCapabilities(item.baseModel);
+                  const caps = getModelCapabilities(item.baseModel, meta?.entry);
                   const limits = getModelLimits(item.baseModel, meta?.entry);
                   const provLogo = meta?.providerLogo || getProviderLogo(item.baseModel);
                   const levelUnsupported =
@@ -1088,7 +1088,7 @@ export function CombosView({
                 </div>
               ) : (
                 pickerFiltered.map((meta) => {
-                  const caps = getModelCapabilities(meta.prefixedId);
+                  const caps = getModelCapabilities(meta.prefixedId, meta.entry);
                   const limits = getModelLimits(meta.prefixedId, meta.entry);
                   return (
                     <button
