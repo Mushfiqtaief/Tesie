@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -78,23 +77,9 @@ func init() {
 }
 
 func main() {
-	// Defensive programming: panic when code mistakenly calls net.DefaultResolver
-	net.DefaultResolver.PreferGo = true
-	net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-		//panic("should never be called")
-		buf := make([]byte, 1024)
-		for {
-			n := runtime.Stack(buf, true)
-			if n < len(buf) {
-				buf = buf[:n]
-				break
-			}
-			buf = make([]byte, 2*len(buf))
-		}
-		fmt.Fprintf(os.Stderr, "panic: should never be called\n\n%s", buf) // always print all goroutine stack
-		os.Exit(2)
-		return nil, nil
-	}
+	var dialer net.Dialer
+	net.DefaultResolver.PreferGo = false
+	net.DefaultResolver.Dial = dialer.DialContext
 
 	_, _ = maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
 
