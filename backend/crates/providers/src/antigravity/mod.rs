@@ -748,7 +748,7 @@ impl AntigravityEngine {
             wire_model
                 .rsplit('-')
                 .next()
-                .filter(|s| matches!(*s, "high" | "medium" | "low"))
+                .filter(|s| matches!(*s, "xhigh" | "high" | "medium" | "low"))
                 .map(str::to_string)
         });
 

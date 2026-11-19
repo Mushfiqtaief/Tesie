@@ -28,7 +28,7 @@ export function getModelCapabilities(
   const hasThinking = Boolean(
     entry?.reasoning === true ||
     (entry?.supported_levels && entry.supported_levels.length > 0) ||
-    /thinking|reasoning|reasoner|r1|qwq|o1|o3|o4|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5|gemini-3|gemini-2\.5|claude-opus|opus-4|sonnet-4|claude-3\.7|claude-3-7|gemma-4|gpt-oss-120b|qwen3\.8|qwen3\.6|qwen3\.5/i.test(
+    /thinking|reasoning|reasoner|r1|qwq|o1|o3|o4|beam-free|big-pickle|skywork|deepseek|flash-free|glm-5|gemini-4|gemini-3|gemini-2\.5|claude-opus|opus-4|opus-5|sonnet-4|sonnet-5|claude-sonnet-4|claude-sonnet-5|claude-3\.7|claude-3-7|gemma-4|gpt-oss-120b|qwen3\.8|qwen3\.6|qwen3\.5/i.test(
       modelSlug,
     )
   );
@@ -139,9 +139,18 @@ export function getModelLimits(
   if (context == null && output == null) {
     const slashIdx = fullSpec.indexOf("/");
     const slug = (slashIdx >= 0 ? fullSpec.slice(slashIdx + 1) : fullSpec).toLowerCase();
-    if (slug.includes("gemini")) {
+    if (slug.includes("gemini-4-neon") || slug.includes("gemini-4-hydrogen") || slug.includes("gemini-4-carbon")) {
+      context = 1048576;
+      output = 262144;
+    } else if (slug.includes("gemini")) {
       context = 1048576;
       output = 65536;
+    } else if ((slug.includes("claude") || slug.includes("sonnet") || slug.includes("opus")) && (slug.includes("5-5") || slug.includes("5.5"))) {
+      context = 1000000;
+      output = 128000;
+    } else if ((slug.includes("claude") || slug.includes("sonnet") || slug.includes("opus")) && (slug.includes("4-6") || slug.includes("4.6"))) {
+      context = 250000;
+      output = 64000;
     } else if (slug.includes("claude") || slug.includes("sonnet") || slug.includes("opus")) {
       context = 200000;
       output = 64000;
@@ -194,6 +203,9 @@ export function getModelLimits(
     } else if (slug.includes("deepseek") || slug.includes("r1")) {
       context = 64000;
       output = 8192;
+    } else if (slug.includes("gpt-oss-120b-medium")) {
+      context = 131072;
+      output = 32768;
     } else if (slug.includes("llama-3_3-70b") || slug.includes("llama-3.3-70b") || slug.includes("mistral-small") || slug.includes("gpt-oss-120b")) {
       context = 131072;
       output = 131072;

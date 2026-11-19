@@ -811,8 +811,8 @@ export function QuotaTrackerView({
                 const aCool = (cooldownMap.get(a.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
                 const bCool = (cooldownMap.get(b.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
                 if (aCool !== bCool) return bCool - aCool;
-                const aFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(a.model) ? 1 : 0;
-                const bFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(b.model) ? 1 : 0;
+                const aFlag = /gemini-4|gemini-3\.8|sonnet|opus|gpt-oss/i.test(a.model) ? 1 : 0;
+                const bFlag = /gemini-4|gemini-3\.8|sonnet|opus|gpt-oss/i.test(b.model) ? 1 : 0;
                 if (aFlag !== bFlag) return bFlag - aFlag;
                 return 0;
               });

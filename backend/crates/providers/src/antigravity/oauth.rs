@@ -1487,13 +1487,19 @@ pub async fn refresh_account_quota(
                     pool_map.get("claude_gpt_session"),
                 ),
                 "gemini_argon" => {
-                    let w = pool_map
-                        .get("gemini_argon_weekly")
-                        .or_else(|| pool_map.get("gemini_weekly"));
-                    let s = pool_map
-                        .get("gemini_argon_session")
-                        .or_else(|| pool_map.get("gemini_session"));
-                    (w, s)
+                    if pool_map.contains_key("gemini_argon_weekly")
+                        || pool_map.contains_key("gemini_argon_session")
+                    {
+                        (
+                            pool_map.get("gemini_argon_weekly"),
+                            pool_map.get("gemini_argon_session"),
+                        )
+                    } else {
+                        (
+                            pool_map.get("gemini_weekly"),
+                            pool_map.get("gemini_session"),
+                        )
+                    }
                 }
                 "gemini" => (pool_map.get("gemini_weekly"), pool_map.get("gemini_session")),
                 _ => (None, None),

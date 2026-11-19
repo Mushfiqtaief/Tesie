@@ -64,8 +64,21 @@ fn infer_model_limits(
     }
 
     let lower = id.to_ascii_lowercase();
-    let (ctx, inp, out) = if lower.contains("gemini") {
+    let (ctx, inp, out) = if lower.contains("gemini-4-neon")
+        || lower.contains("gemini-4-hydrogen")
+        || lower.contains("gemini-4-carbon")
+    {
+        (Some(1_048_576), None, Some(262_144))
+    } else if lower.contains("gemini") {
         (Some(1_048_576), None, Some(65_536))
+    } else if (lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus"))
+        && (lower.contains("5-5") || lower.contains("5.5"))
+    {
+        (Some(1_000_000), None, Some(128_000))
+    } else if (lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus"))
+        && (lower.contains("4-6") || lower.contains("4.6"))
+    {
+        (Some(250_000), None, Some(64_000))
     } else if lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus") {
         (Some(200_000), None, Some(64_000))
     } else if lower.contains("gpt-5") || lower.contains("gpt-6") {
@@ -106,6 +119,8 @@ fn infer_model_limits(
         (Some(32_768), None, Some(32_768))
     } else if lower.contains("qwen3-vl") {
         (Some(32_768), None, Some(16_384))
+    } else if lower.contains("gpt-oss-120b-medium") {
+        (Some(131_072), None, Some(32_768))
     } else if lower.contains("gpt-oss-120b") || lower.contains("llama-3_3-70b") || lower.contains("llama-3.3-70b") {
         (Some(131_072), None, Some(131_072))
     } else if lower.contains("gpt-oss-20b") || lower.contains("nemotron3-omni") || lower.contains("laguna-xs") {
@@ -213,7 +228,21 @@ pub fn infer_model_capabilities(
             || lower.contains("qwen3.5")
         {
             Some(true)
-        } else if is_gemini && lower.contains("3.8") {
+        } else if is_gemini
+            && (lower.contains("gemini-4")
+                || lower.contains("gemini-3")
+                || lower.contains("gemini-2.5")
+                || lower.contains("3.8"))
+        {
+            Some(true)
+        } else if is_claude
+            && (lower.contains("5-5")
+                || lower.contains("5.5")
+                || lower.contains("4-6")
+                || lower.contains("4.6")
+                || lower.contains("3.7")
+                || lower.contains("3-7"))
+        {
             Some(true)
         } else {
             None

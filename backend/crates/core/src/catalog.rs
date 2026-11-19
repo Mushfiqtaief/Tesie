@@ -97,10 +97,6 @@ pub fn is_excluded_antigravity_model_key(raw_id: &str) -> bool {
         || k.ends_with("-sonar")
         || k.ends_with("-image")
         || k.contains("_preview")
-        || k.starts_with("claude-sonnet-5-5")
-        || k.starts_with("claude-sonnet-5.5")
-        || k.starts_with("claude-opus-5-5")
-        || k.starts_with("claude-opus-5.5")
         || k.starts_with("gemini-3.7-")
         || k.starts_with("gemini-3.6-")
         || k.starts_with("gemini-3.1-pro")
@@ -130,7 +126,15 @@ pub fn model_level_capabilities(
                     vec!["low".into(), "medium".into(), "high".into()],
                     Some("high".into()),
                 ),
-                "gemini-4-argon" | "gemini-4-hydrogen" | "gemini-3.8-flash" => (
+                "gemini-4-neon" => (
+                    vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()],
+                    Some("high".into()),
+                ),
+                "gemini-4-hydrogen" => (
+                    vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()],
+                    Some("medium".into()),
+                ),
+                "gemini-4-argon" | "gemini-3.8-flash" | "claude-opus-5-5" | "claude-sonnet-5-5" => (
                     vec!["low".into(), "medium".into(), "high".into()],
                     Some("medium".into()),
                 ),
@@ -225,6 +229,9 @@ pub fn canonical_antigravity_model(raw_id: &str) -> (String, String) {
     if clean == "carbon" || clean.starts_with("gemini-4-carbon") {
         return ("gemini-4-carbon".to_string(), "Gemini 4 Carbon".to_string());
     }
+    if clean == "neon" || clean.starts_with("gemini-4-neon") {
+        return ("gemini-4-neon".to_string(), "Gemini 4 Neon".to_string());
+    }
     if clean == "argon" || clean.starts_with("gemini-4-argon") {
         return ("gemini-4-argon".to_string(), "Gemini 4 Argon".to_string());
     }
@@ -250,6 +257,18 @@ pub fn canonical_antigravity_model(raw_id: &str) -> (String, String) {
         return (
             "gemini-3.8-flash".to_string(),
             "Gemini 3.8 Flash".to_string(),
+        );
+    }
+    if clean.starts_with("claude-opus-5-5") || clean.starts_with("claude-opus-5.5") {
+        return (
+            "claude-opus-5-5".to_string(),
+            "Claude Opus 5.5".to_string(),
+        );
+    }
+    if clean.starts_with("claude-sonnet-5-5") || clean.starts_with("claude-sonnet-5.5") {
+        return (
+            "claude-sonnet-5-5".to_string(),
+            "Claude Sonnet 5.5".to_string(),
         );
     }
     if clean.starts_with("claude-sonnet-4-6") || clean.starts_with("claude-sonnet-4.6") {
@@ -301,22 +320,29 @@ pub fn canonical_antigravity_model(raw_id: &str) -> (String, String) {
         );
     }
 
-    // Generic fallback: strip trailing effort/tier suffixes
+    // Generic fallback: strip trailing effort/tier suffixes iteratively (handles compound suffixes)
     let mut base = clean.as_str();
-    for suffix in [
-        "-high",
-        "-medium",
-        "-low",
-        "-minimal",
-        "-xhigh",
-        "-max",
-        "-tiered",
-        "-thinking",
-    ] {
-        if let Some(stripped) = base.strip_suffix(suffix)
-            && !stripped.is_empty()
-        {
-            base = stripped;
+    loop {
+        let mut changed = false;
+        for suffix in [
+            "-high",
+            "-medium",
+            "-low",
+            "-minimal",
+            "-xhigh",
+            "-max",
+            "-tiered",
+            "-thinking",
+        ] {
+            if let Some(stripped) = base.strip_suffix(suffix)
+                && !stripped.is_empty()
+            {
+                base = stripped;
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
             break;
         }
     }
@@ -346,6 +372,9 @@ pub fn antigravity_quota_short_name(raw_id: &str) -> String {
     if clean == "hydrogen" || clean.starts_with("gemini-4-hydrogen") {
         return "Hydrogen".to_string();
     }
+    if clean == "neon" || clean.starts_with("gemini-4-neon") {
+        return "Neon".to_string();
+    }
     let (_, display) = canonical_antigravity_model(&clean);
     display
 }
@@ -357,7 +386,7 @@ pub fn is_antigravity_model(model_id: &str) -> bool {
     }
     let (canon, _) = canonical_antigravity_model(&base);
     ANTIGRAVITY_MODELS.iter().any(|m| m.id == canon || m.id == base)
-        || matches!(base.as_str(), "argon" | "carbon" | "hydrogen")
+        || matches!(base.as_str(), "argon" | "carbon" | "hydrogen" | "neon")
         || base.starts_with("gemini-4-")
         || base.starts_with("gemini-3.")
         || base.starts_with("gemini-3-")
@@ -529,6 +558,39 @@ static ANTIGRAVITY_MODELS: &[CatalogModel] = &[
         ],
     },
     CatalogModel {
+        id: "gemini-4-neon",
+        name: "Gemini 4 Neon",
+        provider: ProviderKind::Antigravity,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[
+            WireFormat::OpenAiChat,
+            WireFormat::OpenAiResponses,
+            WireFormat::AnthropicMessages,
+        ],
+    },
+    CatalogModel {
+        id: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        provider: ProviderKind::Antigravity,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[
+            WireFormat::OpenAiChat,
+            WireFormat::OpenAiResponses,
+            WireFormat::AnthropicMessages,
+        ],
+    },
+    CatalogModel {
+        id: "claude-sonnet-5-5",
+        name: "Claude Sonnet 5.5",
+        provider: ProviderKind::Antigravity,
+        target_format: WireFormat::OpenAiChat,
+        supported_formats: &[
+            WireFormat::OpenAiChat,
+            WireFormat::OpenAiResponses,
+            WireFormat::AnthropicMessages,
+        ],
+    },
+    CatalogModel {
         id: "gemini-4-argon",
         name: "Gemini 4 Argon",
         provider: ProviderKind::Antigravity,
@@ -562,8 +624,8 @@ static ANTIGRAVITY_MODELS: &[CatalogModel] = &[
         ],
     },
     CatalogModel {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
+        id: "claude-opus-4-6-thinking",
+        name: "Claude Opus 4.6",
         provider: ProviderKind::Antigravity,
         target_format: WireFormat::OpenAiChat,
         supported_formats: &[
@@ -573,8 +635,8 @@ static ANTIGRAVITY_MODELS: &[CatalogModel] = &[
         ],
     },
     CatalogModel {
-        id: "claude-opus-4-6-thinking",
-        name: "Claude Opus 4.6",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
         provider: ProviderKind::Antigravity,
         target_format: WireFormat::OpenAiChat,
         supported_formats: &[
@@ -861,6 +923,35 @@ mod tests {
         assert!(is_excluded_antigravity_model_key("gemini-4-hydrogen-sonar"));
         assert!(is_excluded_antigravity_model_key("orchestrator-carbon"));
         assert!(is_excluded_antigravity_model_key("orchestrator-argon"));
+        assert!(!is_excluded_antigravity_model_key("claude-opus-5-5-high"));
+        assert!(!is_excluded_antigravity_model_key("claude-sonnet-5-5-medium"));
+        assert!(!is_excluded_antigravity_model_key("claude-opus-5.5"));
+        assert!(!is_excluded_antigravity_model_key("claude-sonnet-5.5"));
+
+        assert_eq!(
+            canonical_antigravity_model("claude-opus-5-5-high"),
+            ("claude-opus-5-5".into(), "Claude Opus 5.5".into())
+        );
+        assert_eq!(
+            canonical_antigravity_model("claude-opus-5.5"),
+            ("claude-opus-5-5".into(), "Claude Opus 5.5".into())
+        );
+        assert_eq!(
+            canonical_antigravity_model("claude-sonnet-5-5-low"),
+            ("claude-sonnet-5-5".into(), "Claude Sonnet 5.5".into())
+        );
+        assert_eq!(
+            canonical_antigravity_model("claude-sonnet-5.5"),
+            ("claude-sonnet-5-5".into(), "Claude Sonnet 5.5".into())
+        );
+        assert_eq!(
+            canonical_antigravity_model("gemini-4-neon-xhigh"),
+            ("gemini-4-neon".into(), "Gemini 4 Neon".into())
+        );
+        assert_eq!(
+            canonical_antigravity_model("gemini-4-hydrogen-tiered-xhigh"),
+            ("gemini-4-hydrogen".into(), "Gemini 4 Hydrogen".into())
+        );
 
         let (flash_levels, flash_def) =
             model_level_capabilities(ProviderKind::Antigravity, "gemini-3.8-flash", None, None);
@@ -871,6 +962,26 @@ mod tests {
             model_level_capabilities(ProviderKind::Antigravity, "gemini-4-carbon", None, None);
         assert_eq!(carbon_levels, vec!["low", "medium", "high"]);
         assert_eq!(carbon_def.as_deref(), Some("high"));
+
+        let (neon_levels, neon_def) =
+            model_level_capabilities(ProviderKind::Antigravity, "gemini-4-neon", None, None);
+        assert_eq!(neon_levels, vec!["low", "medium", "high", "xhigh"]);
+        assert_eq!(neon_def.as_deref(), Some("high"));
+
+        let (hydrogen_levels, hydrogen_def) =
+            model_level_capabilities(ProviderKind::Antigravity, "gemini-4-hydrogen", None, None);
+        assert_eq!(hydrogen_levels, vec!["low", "medium", "high", "xhigh"]);
+        assert_eq!(hydrogen_def.as_deref(), Some("medium"));
+
+        let (opus55_levels, opus55_def) =
+            model_level_capabilities(ProviderKind::Antigravity, "claude-opus-5-5", None, None);
+        assert_eq!(opus55_levels, vec!["low", "medium", "high"]);
+        assert_eq!(opus55_def.as_deref(), Some("medium"));
+
+        let (sonnet55_levels, sonnet55_def) =
+            model_level_capabilities(ProviderKind::Antigravity, "claude-sonnet-5-5", None, None);
+        assert_eq!(sonnet55_levels, vec!["low", "medium", "high"]);
+        assert_eq!(sonnet55_def.as_deref(), Some("medium"));
 
         let (sonnet_levels, sonnet_def) =
             model_level_capabilities(ProviderKind::Antigravity, "claude-sonnet-4-6", None, None);

@@ -48,21 +48,26 @@ static BILLING_HDR_RE: LazyLock<Regex> =
 /// Resolves a user/catalog model ID + optional reasoning effort to the exact Cloud Code wire model ID
 /// (ported from `luqman-v1/9router-go/internal/translator/antigravity.go`).
 pub fn resolve_antigravity_upstream_model(raw_model: &str, effort: Option<&str>) -> String {
-    let base = raw_model
-        .split('(')
-        .next()
-        .unwrap_or(raw_model)
+    let without_effort = raw_model.split('(').next().unwrap_or(raw_model).trim();
+    let base = without_effort
+        .strip_prefix("ag/")
+        .or_else(|| without_effort.strip_prefix("AG/"))
+        .unwrap_or(without_effort)
         .trim()
         .to_ascii_lowercase();
 
-    let norm_tier = effort.map(|e| match e.trim().to_ascii_lowercase().as_str() {
-        "xhigh" | "max" | "high" => "high",
-        "minimal" | "low" => "low",
-        "medium" => "medium",
-        _ => "",
-    });
+    let tier_candidates: &[&str] = match effort
+        .map(|e| e.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xhigh") | Some("max") => &["xhigh", "high"],
+        Some("high") => &["high"],
+        Some("medium") => &["medium"],
+        Some("minimal") | Some("low") => &["low"],
+        _ => &[],
+    };
 
-    if let Some(t) = norm_tier.filter(|s| !s.is_empty()) {
+    for t in tier_candidates {
         let candidate = format!("{base}-{t}");
         if let Some(mapped) = map_known_antigravity_id(&candidate) {
             return mapped.to_string();
@@ -76,20 +81,45 @@ pub fn resolve_antigravity_upstream_model(raw_model: &str, effort: Option<&str>)
     base
 }
 
+fn max_output_tokens_for_antigravity_wire(wire_model: &str) -> i64 {
+    let lower = wire_model.to_ascii_lowercase();
+    if lower.starts_with("gemini-4-neon")
+        || lower.starts_with("gemini-4-hydrogen")
+        || lower.starts_with("gemini-4-carbon")
+    {
+        262_144
+    } else if lower.starts_with("claude-opus-5-5") || lower.starts_with("claude-sonnet-5-5") {
+        128_000
+    } else if lower.starts_with("claude-opus-4-6") || lower.starts_with("claude-sonnet-4-6") {
+        64_000
+    } else if lower.starts_with("gpt-oss-120b") {
+        32_768
+    } else {
+        MAX_ANTIGRAVITY_OUTPUT_TOKENS
+    }
+}
+
 fn map_known_antigravity_id(id: &str) -> Option<&'static str> {
     match id {
         "carbon" | "gemini-4-carbon" => Some("gemini-4-carbon-medium"),
-        "gemini-4-carbon-high" => Some("gemini-4-carbon-high"),
-        "gemini-4-carbon-medium" => Some("gemini-4-carbon-medium"),
-        "gemini-4-carbon-low" => Some("gemini-4-carbon-low"),
+        "carbon-high" | "gemini-4-carbon-high" => Some("gemini-4-carbon-high"),
+        "carbon-medium" | "gemini-4-carbon-medium" => Some("gemini-4-carbon-medium"),
+        "carbon-low" | "gemini-4-carbon-low" => Some("gemini-4-carbon-low"),
+        "neon" | "gemini-4-neon" | "neon-medium" | "gemini-4-neon-medium" => {
+            Some("gemini-4-neon-medium")
+        }
+        "neon-high" | "gemini-4-neon-high" => Some("gemini-4-neon-high"),
+        "neon-xhigh" | "gemini-4-neon-xhigh" => Some("gemini-4-neon-xhigh"),
+        "neon-low" | "gemini-4-neon-low" => Some("gemini-4-neon-low"),
         "argon" | "gemini-4-argon" => Some("gemini-4-argon-medium"),
-        "gemini-4-argon-high" => Some("gemini-4-argon-high"),
-        "gemini-4-argon-medium" => Some("gemini-4-argon-medium"),
-        "gemini-4-argon-low" => Some("gemini-4-argon-low"),
+        "argon-high" | "gemini-4-argon-high" => Some("gemini-4-argon-high"),
+        "argon-medium" | "gemini-4-argon-medium" => Some("gemini-4-argon-medium"),
+        "argon-low" | "gemini-4-argon-low" => Some("gemini-4-argon-low"),
         "hydrogen" | "gemini-4-hydrogen" => Some("gemini-4-hydrogen-medium"),
-        "gemini-4-hydrogen-high" => Some("gemini-4-hydrogen-high"),
-        "gemini-4-hydrogen-medium" => Some("gemini-4-hydrogen-medium"),
-        "gemini-4-hydrogen-low" => Some("gemini-4-hydrogen-low"),
+        "hydrogen-xhigh" | "gemini-4-hydrogen-xhigh" => Some("gemini-4-hydrogen-xhigh"),
+        "hydrogen-high" | "gemini-4-hydrogen-high" => Some("gemini-4-hydrogen-high"),
+        "hydrogen-medium" | "gemini-4-hydrogen-medium" => Some("gemini-4-hydrogen-medium"),
+        "hydrogen-low" | "gemini-4-hydrogen-low" => Some("gemini-4-hydrogen-low"),
         "orchestrator-carbon"
         | "orchestrator-carbon-high"
         | "orchestrator-carbon-medium"
@@ -102,6 +132,20 @@ fn map_known_antigravity_id(id: &str) -> Option<&'static str> {
         "gemini-3.8-flash-high" => Some("gemini-3.8-flash-high"),
         "gemini-3.8-flash-medium" => Some("gemini-3.8-flash-medium"),
         "gemini-3.8-flash-low" => Some("gemini-3.8-flash-low"),
+        "claude-opus-5-5"
+        | "claude-opus-5.5"
+        | "claude-opus-5-5-thinking"
+        | "claude-opus-5-5-medium"
+        | "claude-opus-5.5-medium" => Some("claude-opus-5-5-medium"),
+        "claude-opus-5-5-high" | "claude-opus-5.5-high" => Some("claude-opus-5-5-high"),
+        "claude-opus-5-5-low" | "claude-opus-5.5-low" => Some("claude-opus-5-5-low"),
+        "claude-sonnet-5-5"
+        | "claude-sonnet-5.5"
+        | "claude-sonnet-5-5-thinking"
+        | "claude-sonnet-5-5-medium"
+        | "claude-sonnet-5.5-medium" => Some("claude-sonnet-5-5-medium"),
+        "claude-sonnet-5-5-high" | "claude-sonnet-5.5-high" => Some("claude-sonnet-5-5-high"),
+        "claude-sonnet-5-5-low" | "claude-sonnet-5.5-low" => Some("claude-sonnet-5-5-low"),
         "claude-sonnet-4-6"
         | "claude-sonnet-4.6"
         | "claude-sonnet-4-6-thinking"
@@ -580,7 +624,7 @@ pub fn build_antigravity_envelope(
         .or_else(|| chat_body.get("max_tokens"))
         .and_then(Value::as_i64)
         .unwrap_or(16_384)
-        .clamp(1, MAX_ANTIGRAVITY_OUTPUT_TOKENS);
+        .clamp(1, max_output_tokens_for_antigravity_wire(wire_model));
 
     let mut gen_cfg = Map::new();
     gen_cfg.insert("maxOutputTokens".into(), Value::Number(max_out.into()));
@@ -890,5 +934,97 @@ impl AntigravitySseDecoder {
         }
 
         chunks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_claude_5_5_and_gemini_4_wire_models() {
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5-5", None),
+            "claude-opus-5-5-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("ag/claude-opus-5-5", Some("low")),
+            "claude-opus-5-5-low"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5-5", Some("medium")),
+            "claude-opus-5-5-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5-5", Some("high")),
+            "claude-opus-5-5-high"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5-5", Some("xhigh")),
+            "claude-opus-5-5-high"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5-5", Some("max")),
+            "claude-opus-5-5-high"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-opus-5.5", Some("high")),
+            "claude-opus-5-5-high"
+        );
+
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-sonnet-5-5", None),
+            "claude-sonnet-5-5-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-sonnet-5-5", Some("low")),
+            "claude-sonnet-5-5-low"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-sonnet-5-5", Some("medium")),
+            "claude-sonnet-5-5-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("claude-sonnet-5-5", Some("high")),
+            "claude-sonnet-5-5-high"
+        );
+
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", None),
+            "gemini-4-neon-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", Some("low")),
+            "gemini-4-neon-low"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", Some("medium")),
+            "gemini-4-neon-medium"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", Some("high")),
+            "gemini-4-neon-high"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", Some("xhigh")),
+            "gemini-4-neon-xhigh"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-neon", Some("max")),
+            "gemini-4-neon-xhigh"
+        );
+
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-hydrogen", Some("xhigh")),
+            "gemini-4-hydrogen-xhigh"
+        );
+        assert_eq!(
+            resolve_antigravity_upstream_model("gemini-4-argon", Some("xhigh")),
+            "gemini-4-argon-high"
+        );
+
+        assert_eq!(max_output_tokens_for_antigravity_wire("claude-opus-5-5-high"), 128_000);
+        assert_eq!(max_output_tokens_for_antigravity_wire("gemini-4-neon-xhigh"), 262_144);
+        assert_eq!(max_output_tokens_for_antigravity_wire("gemini-3.8-flash-high"), 65_536);
     }
 }
