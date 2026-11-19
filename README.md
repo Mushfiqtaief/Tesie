@@ -13,10 +13,12 @@ Token Saver compression, and a live React + Carbon telemetry dashboard.
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-0EA5E9?style=flat-square&logo=apple&logoColor=white)](#install-on-macos)
 [![Linux](https://img.shields.io/badge/Linux-x64%20%26%20ARM64-0284C7?style=flat-square&logo=linux&logoColor=white)](#install-on-linux-any-distro)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0369A1?style=flat-square&logo=windows&logoColor=white)](#install-on-windows)
+[![Docker](https://img.shields.io/badge/Docker-Multi--arch%20ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](#run-with-docker-or-docker-compose)
 [![Rust](https://img.shields.io/badge/Rust-Axum%20%2B%20SQLite-1E293B?style=flat-square&logo=rust)](#architecture)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981?style=flat-square)](LICENSE)
 
 [Quick Install](#quick-install) &middot;
+[Docker](#run-with-docker-or-docker-compose) &middot;
 [Features](#features) &middot;
 [Architecture](#architecture) &middot;
 [CLI Commands](#cli-commands) &middot;
@@ -150,6 +152,31 @@ irm "https://raw.githubusercontent.com/Mushfiqtaief/Tesie/main/scripts/install.p
 tesie start --open
 ```
 
+### Run with Docker (or Docker Compose)
+
+Multi-architecture container image (`linux/amd64` and `linux/arm64`) with hardened Argon2id authentication:
+
+#### Option A — Docker Compose
+
+```bash
+# 1. Set your secure admin token
+export ADMIN_TOKEN=$(openssl rand -base64 32)
+
+# 2. Launch container
+docker compose up -d
+```
+
+#### Option B — Docker CLI
+
+```bash
+docker run -d \
+  --name tesie \
+  -p 20129:20129 \
+  -v tesie-data:/data \
+  -e ADMIN_TOKEN="your-secure-admin-token" \
+  ghcr.io/mushfiqtaief/tesie:latest
+```
+
 ---
 
 ## CLI Commands
@@ -195,7 +222,7 @@ curl http://127.0.0.1:20129/v1/chat/completions \
 Tesie is proudly crafted and maintained by:
 
 - **[Mushfiq Taief](https://github.com/Mushfiqtaief)** — Creator &amp; Lead Architect
-- **[Tahsin Arafat](https://github.com/TahsinArafat)** — Core Contributor (Proxy URL export, feature engineering &amp; testing)
+- **[Tahsin Arafat](https://github.com/TahsinArafat)** — Core Contributor (Docker containerization, Admin authentication lockdown &amp; Argon2id hashing, portable proxy exports, and test engineering)
 
 ---
 
