@@ -213,6 +213,8 @@ pub struct OpenCodeEngine {
     quota_probe_running: AtomicBool,
     quota_probe_meta: Mutex<QuotaProbeStatus>,
     probe_notify: Notify,
+    last_bridge_event: Arc<Mutex<Option<tesie_core::BridgeEvent>>>,
+    bridge_stats: Arc<Mutex<tesie_core::BridgeStats>>,
 }
 
 impl OpenCodeEngine {
@@ -241,7 +243,35 @@ impl OpenCodeEngine {
             quota_probe_running: AtomicBool::new(false),
             quota_probe_meta: Mutex::new(QuotaProbeStatus::default()),
             probe_notify: Notify::new(),
+            last_bridge_event: Arc::new(Mutex::new(None)),
+            bridge_stats: Arc::new(Mutex::new(tesie_core::BridgeStats::default())),
         }
+    }
+
+    pub fn record_bridge_event(&self, event: tesie_core::BridgeEvent) {
+        let mut stats = self.bridge_stats.lock().unwrap();
+        stats.total_transcriptions += 1;
+        if event.kind == "image" {
+            stats.images_transcribed += 1;
+        } else {
+            stats.audio_transcribed += 1;
+        }
+        stats.last_event = Some(event.clone());
+        let mut last = self.last_bridge_event.lock().unwrap();
+        *last = Some(event);
+    }
+
+    pub fn last_bridge_event(&self) -> Option<tesie_core::BridgeEvent> {
+        let now = now_ms();
+        self.last_bridge_event
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|ev| now.saturating_sub(ev.timestamp_ms) < 45_000)
+    }
+
+    pub fn bridge_stats(&self) -> tesie_core::BridgeStats {
+        self.bridge_stats.lock().unwrap().clone()
     }
 
     pub fn notify_probe_config_changed(&self) {

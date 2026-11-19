@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   Check,
   Code2,
   Eye,
@@ -17,6 +18,7 @@ import {
   INPUT_CLASS,
 } from "../components/UiPrimitives";
 import type {
+  BridgeStats,
   OpenAiModelEntry,
   UpdateBridgePayload,
 } from "../types";
@@ -32,6 +34,14 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Live Bridge telemetry stats
+  const [stats, setStats] = useState<BridgeStats>({
+    total_transcriptions: 0,
+    images_transcribed: 0,
+    audio_transcribed: 0,
+    last_event: null,
+  });
+
   // Form draft state
   const [visionEnabled, setVisionEnabled] = useState(false);
   const [visionModel, setVisionModel] = useState<string>("");
@@ -43,9 +53,9 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
   const [audioPrompt, setAudioPrompt] = useState<string>("");
 
   // Live simulation state
-  const [simPrompt, setSimPrompt] = useState("What error is happening in this screenshot?");
+  const [simPrompt, setSimPrompt] = useState("What error is occurring in this console screenshot?");
   const [simImageUrl, setSimImageUrl] = useState("https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600");
-  const [simTargetModel, setSimTargetModel] = useState("deepseek-chat");
+  const [simTargetModel, setSimTargetModel] = useState("oc/deepseek-v4.1-flash-free");
   const [simulating, setSimulating] = useState(false);
   const [simResult, setSimResult] = useState<{
     transcription: string;
@@ -54,14 +64,19 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
 
   useEffect(() => {
     void loadData();
+    const interval = setInterval(() => {
+      void loadStatsOnly();
+    }, 4000);
+    return () => clearInterval(interval);
   }, []);
 
   async function loadData() {
     setLoading(true);
     try {
-      const [bridgeRes, modelsRes] = await Promise.all([
+      const [bridgeRes, modelsRes, statsRes] = await Promise.all([
         api.getBridgeConfig(),
         api.getModels().catch(() => []),
+        api.getBridgeStats().catch(() => ({ stats: { total_transcriptions: 0, images_transcribed: 0, audio_transcribed: 0, last_event: null } })),
       ]);
 
       const cfg = bridgeRes.config;
@@ -75,10 +90,22 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
       setAudioPrompt(cfg.audio_prompt || "");
 
       setModels(modelsRes);
+      setStats(statsRes.stats);
     } catch (err) {
       onNotify?.(err instanceof Error ? err.message : "Failed to load bridge configuration", true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadStatsOnly() {
+    try {
+      const res = await api.getBridgeStats();
+      if (res.stats) {
+        setStats(res.stats);
+      }
+    } catch {
+      // Background poll silently ignore
     }
   }
 
@@ -122,23 +149,57 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
     }
   }
 
-  function handleSimulate() {
+  async function handleSimulate() {
     setSimulating(true);
+
+    const targetModelClean = simTargetModel.trim() || "oc/deepseek-v4.1-flash-free";
+    const transcriberModelClean = visionModel.trim() || "ag/gemini-3.8-flash";
+
+    const transcriberProvider = transcriberModelClean.startsWith("ag/")
+      ? "antigravity"
+      : transcriberModelClean.startsWith("ovh/")
+      ? "ovh"
+      : transcriberModelClean.startsWith("lf/")
+      ? "cp-lf"
+      : "opencode";
+
+    const targetProvider = targetModelClean.startsWith("ag/")
+      ? "antigravity"
+      : targetModelClean.startsWith("ovh/")
+      ? "ovh"
+      : targetModelClean.startsWith("lf/")
+      ? "cp-lf"
+      : "opencode";
+
+    // Trigger live simulation event on backend so Live Routing Topology canvas immediately connects
+    try {
+      await api.simulateBridgeEvent({
+        transcriber_provider: transcriberProvider,
+        target_provider: targetProvider,
+        transcriber_model: transcriberModelClean,
+        target_model: targetModelClean,
+        kind: "image",
+      });
+      void loadStatsOnly();
+    } catch {
+      // Continue simulation locally
+    }
+
     setTimeout(() => {
-      const sampleTranscription = visionMode === "code_ocr"
-        ? `[Attached Image Analysis (Multimodal Bridge - OCR Focus):
-- Image Type: IDE Code Editor / Terminal Screenshot
+      const sampleTranscription =
+        visionMode === "code_ocr"
+          ? `[Attached Image Analysis (OCR Focus):
 - Visible File: /src/server.ts (TypeScript)
 - Highlighted Error: "TypeError: Cannot read properties of undefined (reading 'listen') at line 42:15"
 - Code Context:
   40: const app = express();
   41: const port = process.env.PORT || 3000;
   42: server.listen(port, () => { ... });
-- Note: 'server' variable is never initialized; 'app.listen' should be used instead.]`
-        : `[Attached Image Analysis (Multimodal Bridge - Standard):
-- Image Type: Screenshot of web development IDE showing a compilation failure.
-- Key Elements: Terminal console with red error text, code window on the left with line numbers 35-50.
-- Text Content: "TypeError: Cannot read properties of undefined (reading 'listen')".]`;
+- Note: 'server' variable is never initialized; replace with 'app.listen']`
+          : `[Attached Image Analysis (Standard):
+- Depicts: Developer IDE editor with runtime exception console.
+- Text Content: "TypeError: Cannot read properties of undefined (reading 'listen')"
+- Key Context: Express.js port bind error at server.ts:42]`;
 
       const transformedText = `${simPrompt}\n\n${sampleTranscription}`;
 
@@ -146,7 +207,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
         transcription: sampleTranscription,
         finalPayload: JSON.stringify(
           {
-            model: simTargetModel,
+            model: targetModelClean,
             messages: [
               {
                 role: "user",
@@ -155,40 +216,38 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
             ],
           },
           null,
-          2
+          2,
         ),
       });
       setSimulating(false);
+      onNotify?.("Simulated multimodal bridge translation & recorded routing topology event", false);
     }, 450);
   }
 
+  const isBridgeActive = visionEnabled || audioEnabled;
+
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-xl font-bold tracking-tight text-[var(--text-primary)]">
-              Multimodal Bridge
-            </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold tracking-tight text-[var(--text-primary)]">
+            Multimodal Bridge
+          </h1>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
+              isBridgeActive
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                : "bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-subtle)]"
+            }`}
+          >
             <span
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
-                visionEnabled || audioEnabled
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : "bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-subtle)]"
+              className={`h-1.5 w-1.5 rounded-full ${
+                isBridgeActive ? "bg-emerald-400 animate-pulse" : "bg-[var(--text-muted)]"
               }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  visionEnabled || audioEnabled ? "bg-emerald-400 animate-pulse" : "bg-[var(--text-muted)]"
-                }`}
-              />
-              {visionEnabled || audioEnabled ? "Active" : "Inactive"}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">
-            Automatically transcribe image and audio inputs via high-speed vision models before routing to text-only models (e.g. DeepSeek Chat, Llama 3, Qwen Coder).
-          </p>
+            />
+            {isBridgeActive ? "Active" : "Disabled"}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -222,11 +281,74 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
         </div>
       </div>
 
-      {/* Grid: Vision Adapter & Audio Adapter */}
+      {/* Real Live Stats Dashboard (Noise-Free) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* Stat 1: Total Transcriptions */}
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
+            <span>Total Transcriptions</span>
+            <Activity className="h-3.5 w-3.5 text-sky-400" />
+          </div>
+          <div className="mt-2 text-2xl font-bold font-mono text-[var(--text-primary)]">
+            {stats.total_transcriptions}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--text-secondary)]">
+            Bridged requests delivered
+          </div>
+        </div>
+
+        {/* Stat 2: Images Transcribed */}
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
+            <span>Images Transcribed</span>
+            <Eye className="h-3.5 w-3.5 text-sky-400" />
+          </div>
+          <div className="mt-2 text-2xl font-bold font-mono text-sky-400">
+            {stats.images_transcribed}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--text-secondary)]">
+            Image-to-text descriptions
+          </div>
+        </div>
+
+        {/* Stat 3: Audio Transcribed */}
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
+            <span>Audio Transcribed</span>
+            <Volume2 className="h-3.5 w-3.5 text-purple-400" />
+          </div>
+          <div className="mt-2 text-2xl font-bold font-mono text-purple-400">
+            {stats.audio_transcribed}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--text-secondary)]">
+            Voice & speech streams
+          </div>
+        </div>
+
+        {/* Stat 4: Active Routing Pair */}
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
+            <span>Last Bridge Route</span>
+            <span
+              className={`h-2 w-2 rounded-full ${
+                stats.last_event ? "bg-emerald-400 animate-pulse" : "bg-[var(--text-muted)]"
+              }`}
+            />
+          </div>
+          <div className="mt-2 text-xs font-mono font-semibold text-[var(--text-primary)] truncate" title={stats.last_event?.transcriber_model || "gemini-3.8-flash"}>
+            {stats.last_event?.transcriber_model ? `${stats.last_event.transcriber_provider} → ${stats.last_event.target_provider}` : "Standby (Ready)"}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--text-muted)] truncate">
+            {stats.last_event ? stats.last_event.target_model : "No active stream"}
+          </div>
+        </div>
+      </div>
+
+      {/* Grid: Vision & Audio Configuration */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Card 1: Vision Bridge */}
+        {/* Card 1: Vision Adapter */}
         <Card
-          title="Vision Bridge (Image-to-Text Fallback)"
+          title="Vision Bridge"
           actions={
             <label className="relative inline-flex items-center cursor-pointer">
               <input
@@ -240,44 +362,31 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
           }
         >
           <div className="p-4 space-y-4">
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3 text-xs text-[var(--text-secondary)] space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-                <Eye className="h-4 w-4 text-sky-400" />
-                How Vision Bridge Operates
-              </div>
-              <p>
-                When a downstream client sends an image to a text-only model, Tesie intercepts the image, calls your selected Vision Adapter model to generate a rich textual description, and passes the description directly to the text-only model.
-              </p>
-            </div>
-
             {/* Vision Model Selector */}
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                Vision Transcriber Model
+                Transcriber Model
               </label>
               <select
                 value={visionModel}
                 onChange={(e) => setVisionModel(e.target.value)}
                 className={`${INPUT_CLASS} text-xs font-mono`}
               >
-                <option value="">Default (Auto-select fast vision model: Gemini 3.8 Flash / Hy4 Flash)</option>
+                <option value="">Default (Auto: Gemini 3.8 Flash / Hy4 Flash)</option>
                 {visionCapableModels.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.id} ({m.display_name || m.id})
                   </option>
                 ))}
               </select>
-              <p className="text-[11px] text-[var(--text-muted)]">
-                Only models with verified Vision capability are shown.
-              </p>
             </div>
 
             {/* Transcription Mode Selector */}
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                Transcription Detail Mode
+                Detail Mode
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setVisionMode("standard")}
@@ -291,8 +400,8 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                     <FileText className="h-3.5 w-3.5 text-sky-400" />
                     Standard
                   </div>
-                  <span className="text-[10px] text-[var(--text-muted)] leading-tight">
-                    Comprehensive visual, structural, and text context.
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    Full context
                   </span>
                 </button>
 
@@ -307,10 +416,10 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 >
                   <div className="flex items-center gap-1.5 font-semibold text-xs text-[var(--text-primary)]">
                     <Code2 className="h-3.5 w-3.5 text-amber-400" />
-                    Code & OCR
+                    Code OCR
                   </div>
-                  <span className="text-[10px] text-[var(--text-muted)] leading-tight">
-                    Prioritizes exact code snippets, logs, errors, and line numbers.
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    Exact text & code
                   </span>
                 </button>
 
@@ -327,21 +436,21 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                     <Zap className="h-3.5 w-3.5 text-emerald-400" />
                     Minimal
                   </div>
-                  <span className="text-[10px] text-[var(--text-muted)] leading-tight">
-                    1-2 concise sentences to minimize token footprint.
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    Low token brief
                   </span>
                 </button>
               </div>
             </div>
 
             {/* Custom Prompt Override */}
-            <div className="space-y-1.5 pt-1">
+            <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                Custom Vision System Prompt (Optional)
+                System Prompt (Optional Override)
               </label>
               <textarea
-                rows={3}
-                placeholder="Leave blank to use the built-in optimized prompt for the selected mode..."
+                rows={2}
+                placeholder="Leave blank for built-in prompt..."
                 value={visionPrompt}
                 onChange={(e) => setVisionPrompt(e.target.value)}
                 className={`${INPUT_CLASS} text-xs font-mono`}
@@ -350,9 +459,9 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
           </div>
         </Card>
 
-        {/* Card 2: Audio Bridge */}
+        {/* Card 2: Audio Adapter */}
         <Card
-          title="Audio Bridge (Speech-to-Text Fallback)"
+          title="Audio Bridge"
           actions={
             <label className="relative inline-flex items-center cursor-pointer">
               <input
@@ -361,51 +470,38 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 onChange={(e) => setAudioEnabled(e.target.checked)}
                 className="sr-only peer"
               />
-              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500 peer-checked:border-emerald-500"></div>
+              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500 peer-checked:border-purple-500"></div>
             </label>
           }
         >
           <div className="p-4 space-y-4">
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3 text-xs text-[var(--text-secondary)] space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-                <Volume2 className="h-4 w-4 text-emerald-400" />
-                How Audio Bridge Operates
-              </div>
-              <p>
-                When an audio payload is submitted to a model without audio capabilities, the audio file is automatically transcribed verbatim into text and supplied to your target model.
-              </p>
-            </div>
-
             {/* Audio Model Selector */}
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                Audio Transcriber Model
+                Transcriber Model
               </label>
               <select
                 value={audioModel}
                 onChange={(e) => setAudioModel(e.target.value)}
                 className={`${INPUT_CLASS} text-xs font-mono`}
               >
-                <option value="">Default (Auto-select Gemini 3.8 Flash / Mimo Omni)</option>
+                <option value="">Default (Auto: Whisper Large / Gemini 3.8 Flash)</option>
                 {audioCapableModels.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.id} ({m.display_name || m.id})
                   </option>
                 ))}
               </select>
-              <p className="text-[11px] text-[var(--text-muted)]">
-                Only models with verified Audio input capability are shown.
-              </p>
             </div>
 
             {/* Custom Audio Prompt Override */}
-            <div className="space-y-1.5 pt-1">
+            <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                Custom Audio System Prompt (Optional)
+                System Prompt (Optional Override)
               </label>
               <textarea
-                rows={3}
-                placeholder="Leave blank to use default: 'You are an audio transcription engine. Transcribe this audio verbatim...'"
+                rows={2}
+                placeholder="Leave blank for default: 'You are an audio transcription engine...'"
                 value={audioPrompt}
                 onChange={(e) => setAudioPrompt(e.target.value)}
                 className={`${INPUT_CLASS} text-xs font-mono`}
@@ -415,12 +511,12 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
         </Card>
       </div>
 
-      {/* Card 3: Interactive Live Bridge Simulator */}
+      {/* Simulator: Interactive Verification */}
       <Card
-        title="Interactive Bridge Simulator"
+        title="Interactive Bridge Tester"
         actions={
           <span className="font-mono text-xs text-[var(--text-muted)]">
-            Simulate image routing to text-only models
+            Tests transcribing & routes topology
           </span>
         }
       >
@@ -428,7 +524,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
-                User Question / Prompt
+                User Question
               </label>
               <input
                 type="text"
@@ -446,14 +542,13 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 type="text"
                 value={simTargetModel}
                 onChange={(e) => setSimTargetModel(e.target.value)}
-                placeholder="e.g. deepseek-chat, llama-3"
                 className={`${INPUT_CLASS} text-xs font-mono`}
               />
             </div>
 
             <div>
               <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
-                Image Attachment URL
+                Image Attachment
               </label>
               <div className="flex gap-2">
                 <input
@@ -480,18 +575,18 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-[var(--border-subtle)]">
               <div>
                 <span className="mb-1 block font-mono text-[11px] font-semibold text-sky-400">
-                  1. Generated Multimodal Bridge Description
+                  Transcribed Description
                 </span>
-                <pre className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 font-mono text-[11px] text-[var(--text-primary)] whitespace-pre-wrap max-h-56 overflow-y-auto">
+                <pre className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 font-mono text-[11px] text-[var(--text-primary)] whitespace-pre-wrap max-h-52 overflow-y-auto">
                   {simResult.transcription}
                 </pre>
               </div>
 
               <div>
                 <span className="mb-1 block font-mono text-[11px] font-semibold text-emerald-400">
-                  2. Transformed Payload Delivered to {simTargetModel}
+                  Delivered Payload to {simTargetModel}
                 </span>
-                <pre className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 font-mono text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap max-h-56 overflow-y-auto">
+                <pre className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 font-mono text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap max-h-52 overflow-y-auto">
                   {simResult.finalPayload}
                 </pre>
               </div>

@@ -428,6 +428,24 @@ export interface TopologyResponse {
   providers: TopologyProviderNode[];
   combos?: ComboRecord[];
   antigravity_accounts?: AntigravityAccountView[];
+  bridge_event?: BridgeEvent | null;
+  bridge_stats?: BridgeStats | null;
+}
+
+export interface BridgeEvent {
+  transcriber_provider: string;
+  target_provider: string;
+  transcriber_model: string;
+  target_model: string;
+  kind: "image" | "audio" | string;
+  timestamp_ms: number;
+}
+
+export interface BridgeStats {
+  total_transcriptions: number;
+  images_transcribed: number;
+  audio_transcribed: number;
+  last_event: BridgeEvent | null;
 }
 
 export type RoutingStrategy = "fallback" | "round-robin" | "random";

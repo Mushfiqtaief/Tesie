@@ -443,3 +443,22 @@ impl Default for MultimodalBridgeConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeEvent {
+    pub transcriber_provider: String,
+    pub target_provider: String,
+    pub transcriber_model: String,
+    pub target_model: String,
+    pub kind: String,
+    pub timestamp_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BridgeStats {
+    pub total_transcriptions: u64,
+    pub images_transcribed: u64,
+    pub audio_transcribed: u64,
+    pub last_event: Option<BridgeEvent>,
+}
+

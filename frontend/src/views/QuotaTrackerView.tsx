@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
+  Globe,
   LayoutGrid,
   List,
   Loader2,
@@ -12,13 +14,14 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  ShieldAlert,
   SlidersHorizontal,
   UserCheck,
 } from "lucide-react";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ProbeSettingsBar } from "../components/ProbeSettingsBar";
 import { QuotaPageSkeleton } from "../components/Skeleton";
+import { ModelCapabilityBadges } from "../components/ModelCapabilityBadges";
+import { getModelCapabilities, getModelChipClasses } from "../utils/modelCapabilities";
 import {
   Button,
   EmptyState,
@@ -26,7 +29,6 @@ import {
   MeterBar,
   Modal,
   SlideOverDrawer,
-  StatusPill,
 } from "../components/UiPrimitives";
 import type {
   AntigravityAccountView,
@@ -69,49 +71,6 @@ function readInitialViewMode(): QuotaViewMode {
     // ignore
   }
   return "table";
-}
-
-function agPctColor(pct: number): string {
-  if (pct <= 10) return "var(--danger)";
-  if (pct <= 35) return "var(--warning)";
-  return "var(--success)";
-}
-
-function QuotaRing({ pct, size = 18 }: { pct: number; size?: number }) {
-  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
-  const r = 7;
-  const c = 2 * Math.PI * r;
-  const offset = c * (1 - clamped / 100);
-  const stroke = agPctColor(clamped);
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 20 20"
-      className="shrink-0 -rotate-90"
-      aria-hidden="true"
-    >
-      <circle
-        cx="10"
-        cy="10"
-        r={r}
-        fill="none"
-        stroke="var(--border-subtle)"
-        strokeWidth="2.4"
-      />
-      <circle
-        cx="10"
-        cy="10"
-        r={r}
-        fill="none"
-        stroke={stroke}
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeDasharray={c}
-        strokeDashoffset={offset}
-      />
-    </svg>
-  );
 }
 
 function isAgAccountBanned(acct: AntigravityAccountView): boolean {
@@ -229,6 +188,15 @@ export function QuotaTrackerView({
   const [refreshingAgAll, setRefreshingAgAll] = useState(false);
   const [refreshingAgOne, setRefreshingAgOne] = useState<string | null>(null);
   const [togglingAgId, setTogglingAgId] = useState<string | null>(null);
+  const [expandedAccountIds, setExpandedAccountIds] = useState<Set<string>>(new Set());
+  function toggleAccountExpanded(id: string) {
+    setExpandedAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Proxy export drawer
   const [exportOpen, setExportOpen] = useState(false);
@@ -846,11 +814,11 @@ export function QuotaTrackerView({
               const assigned = acct.partition?.assigned_proxies ?? [];
               const firstNode = assigned[0]?.name;
               const lastNode = assigned[assigned.length - 1]?.name;
-              const { geminiWeekly, gemini5h, claudeWeekly, claude5h } = splitAgMainPools(acct);
+              const { geminiWeekly: gemWeekly, claudeWeekly } = splitAgMainPools(acct);
               const cooldownMap = new Map(
                 (acct.model_cooldowns ?? []).map((mc) => [mc.model, mc]),
               );
-              const modelsList = (acct.quota?.models ?? []).filter(
+              const availableModels = (acct.quota?.models ?? []).filter(
                 (m) =>
                   m.unlocked !== false &&
                   (!qLower ||
@@ -860,87 +828,72 @@ export function QuotaTrackerView({
                     (acct.email || "").toLowerCase().includes(qLower)),
               );
 
-              const renderFamilyPanel = (
-                title: string,
-                weekly?: AntigravityPoolWindow,
-                fiveH?: AntigravityPoolWindow,
-              ) => (
-                <div className="space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/45 p-3.5">
-                  <div className="text-[13px] font-semibold text-[var(--text-primary)]">
-                    {title}
-                  </div>
-                  {[
-                    { label: "Weekly limit", w: weekly },
-                    { label: "5h limit", w: fiveH },
-                  ].map(({ label, w }) => {
-                    const pct = w
-                      ? Math.max(0, Math.min(100, Math.round(w.remaining_percentage)))
-                      : null;
-                    return (
-                      <div
-                        key={label}
-                        className="flex items-center justify-between gap-3 text-[13px] tabular-nums"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-[var(--text-secondary)]">{label}</div>
-                          {w?.reset_at && w.reset_at > nowMs && (
-                            <div className="text-[11px] text-[var(--text-muted)]">
-                              Resets in {formatCountdown(w.reset_at, nowMs)}
-                            </div>
-                          )}
-                        </div>
-                        {pct !== null ? (
-                          <div className="flex shrink-0 items-center gap-2 font-mono">
-                            <span
-                              className="font-semibold"
-                              style={{ color: agPctColor(pct) }}
-                            >
-                              {pct}% left
-                            </span>
-                            <QuotaRing pct={pct} size={18} />
-                          </div>
-                        ) : (
-                          <span className="font-mono text-xs text-[var(--text-muted)]">
-                            Pending sync
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
+              const isExpanded = expandedAccountIds.has(acct.id);
+
+              // Sort models: priority to cooling/failed models, then flagship models, then lite
+              const sortedModels = [...availableModels].sort((a, b) => {
+                const aCool = (cooldownMap.get(a.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
+                const bCool = (cooldownMap.get(b.model)?.cooldown_until ?? 0) > nowMs ? 1 : 0;
+                if (aCool !== bCool) return bCool - aCool;
+                const aFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(a.model) ? 1 : 0;
+                const bFlag = /gemini-3.8|sonnet|opus|gpt-oss/i.test(b.model) ? 1 : 0;
+                if (aFlag !== bFlag) return bFlag - aFlag;
+                return 0;
+              });
+
+              const visibleModels = isExpanded
+                ? sortedModels
+                : sortedModels.filter((m, i) => i < 4 || (cooldownMap.get(m.model)?.cooldown_until ?? 0) > nowMs);
+              const hasHiddenModels = !isExpanded && sortedModels.length > visibleModels.length;
 
               const cardSurface = "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]";
 
               return (
                 <article
                   key={acct.id}
-                  className={`group relative overflow-hidden flex flex-col justify-between gap-4 rounded-2xl border p-4 sm:p-5 transition-colors duration-150 ${cardSurface} ${
-                    !acct.enabled ? "opacity-80" : ""
+                  className={`group relative overflow-hidden flex flex-col justify-between gap-3.5 rounded-2xl border p-4 sm:p-5 transition-colors duration-150 ${cardSurface} ${
+                    !acct.enabled ? "opacity-75" : ""
                   }`}
                 >
-                  {/* Status Corner Ribbon */}
-                  {cooling && (
-                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-                      <span>Cooldown ({acct.cooldown_until && acct.cooldown_until > nowMs ? formatCountdown(acct.cooldown_until, nowMs) : "active"})</span>
-                    </div>
-                  )}
-                  {isBanned && (
+                  {/* Status Corner Ribbon (Unified across all account states) */}
+                  {isBanned ? (
                     <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-                      <span>Banned</span>
+                      <span>Banned · Auto-disabled</span>
+                    </div>
+                  ) : cooling ? (
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
+                    </div>
+                  ) : !acct.enabled ? (
+                    acct.last_error && /license|gemini code assist/i.test(acct.last_error) ? (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                        <span>Disabled · License Inactive</span>
+                      </div>
+                    ) : (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                        <span>Disabled · Inactive</span>
+                      </div>
+                    )
+                  ) : (
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 backdrop-blur-md shadow-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+                      <span>Active · Serving Tokens</span>
                     </div>
                   )}
 
-                  {/* Account Header Row */}
-                  <div className={`flex flex-wrap items-start justify-between gap-3 ${cooling || isBanned ? "sm:pr-36" : ""}`}>
-                    <div className="min-w-0 flex-1">
+                  {/* Header: Identity & Unified Action Toolbar */}
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:pr-48">
+                    {/* Identity Column */}
+                    <div className="flex flex-col gap-1.5 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--text-muted)]">
+                        <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-xs font-semibold text-[var(--text-muted)]">
                           #{idx + 1}
                         </span>
-                        <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
+                        <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]" title={acct.email || acct.name}>
                           {acct.email || acct.name}
                         </span>
                         {acct.quota?.plan && (
@@ -948,160 +901,256 @@ export function QuotaTrackerView({
                             {acct.quota.plan}
                           </span>
                         )}
-                        {isBanned ? (
-                          <StatusPill tone="danger" dot>
-                            Banned &middot; Auto-disabled
-                          </StatusPill>
-                        ) : !acct.enabled ? (
-                          <StatusPill tone="neutral">Disabled</StatusPill>
-                        ) : cooling ? (
-                          <StatusPill tone="warning" dot pulse>
-                            {acct.cooldown_until && acct.cooldown_until > nowMs
-                              ? formatCountdown(acct.cooldown_until, nowMs)
-                              : "Cooldown"}
-                          </StatusPill>
-                        ) : (
-                          <StatusPill tone="success" dot>
-                            Ready
-                          </StatusPill>
-                        )}
                       </div>
 
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--text-muted)]">
-                        <span>
-                          Sticky:{" "}
-                          <span className="font-semibold text-[var(--accent)]">
-                            {primaryPx ? primaryPx.name : "Direct"}
-                          </span>
+                      {/* Routing & Sync Metadata */}
+                      <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--text-muted)]">
+                        <span className="flex items-center gap-1">
+                          <Globe className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+                          <span className="text-[var(--text-secondary)] font-medium">{primaryPx ? primaryPx.name : "Direct"}</span>
+                          {assigned.length > 1 && !assigned[0]?.is_direct
+                            ? ` (${firstNode} → ${lastNode}, ${assigned.length})`
+                            : ""}
                         </span>
-                        {assigned.length > 1 && !assigned[0]?.is_direct && (
-                          <span>
-                            &middot; Slice {firstNode} &rarr; {lastNode} ({assigned.length} proxies)
-                          </span>
-                        )}
+                        <span>·</span>
                         <span>
-                          &middot; Synced{" "}
-                          {acct.quota?.fetched_at
-                            ? formatTimeAgo(acct.quota.fetched_at, nowMs)
-                            : "never"}
+                          Synced {acct.quota?.fetched_at ? formatTimeAgo(acct.quota.fetched_at, nowMs) : "pending"}
                         </span>
                       </div>
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <Button
-                        variant="secondary"
-                        size="sm"
+                    {/* Unified Action Toolbar */}
+                    <div className="flex shrink-0 items-center gap-1.5 self-start sm:self-center">
+                      {cooling && onUpdateAccountConnection && (
+                        <button
+                          type="button"
+                          onClick={() => void handleResetAgCooldownClick(acct.id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                          title="Clear account cooldown"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          <span>Reset</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
                         disabled={refreshingAgOne === acct.id}
                         onClick={() => void handleRefreshAgSingleClick(acct.id)}
-                        title="Sync Cloud Code quotas"
+                        className="inline-flex items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1.5 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-45"
+                        title="Sync quotas for this account"
+                        aria-label="Sync quotas"
                       >
-                        <RefreshCw
-                          className={`h-3.5 w-3.5 ${
-                            refreshingAgOne === acct.id ? "animate-spin" : ""
-                          }`}
-                        />
-                        Sync
-                      </Button>
-                      {cooling && onUpdateAccountConnection && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          disabled={togglingAgId === acct.id}
-                          onClick={() => void handleResetAgCooldownClick(acct.id)}
-                          title="Reset account cooldown"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5 text-[var(--warning)]" />
-                          Reset
-                        </Button>
-                      )}
+                        <RefreshCw className={`h-3.5 w-3.5 ${refreshingAgOne === acct.id ? "animate-spin text-[var(--accent)]" : ""}`} />
+                      </button>
+
                       {onUpdateAccountConnection && (
-                        <Button
-                          variant={acct.enabled ? "secondary" : "primary"}
-                          size="sm"
+                        <button
+                          type="button"
                           disabled={togglingAgId === acct.id}
                           onClick={() => void handleToggleAgEnabledClick(acct)}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                            acct.enabled
+                              ? "border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
+                              : "border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+                          }`}
                         >
                           {acct.enabled ? "Disable" : "Enable"}
-                        </Button>
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {acct.last_error && (
-                    <div
-                      className={`flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-xs ${
-                        isBanned
-                          ? "bg-[var(--danger-soft)] text-[var(--danger)]"
-                          : "bg-[var(--warning-soft)] text-[var(--warning)]"
-                      }`}
-                    >
-                      {isBanned ? (
-                        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                      ) : (
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      )}
-                      <span className="min-w-0 break-words">
-                        {formatCooldownReason(acct.last_error) || acct.last_error}
-                      </span>
+                  {/* Quota Weekly Pools (Compact, high-contrast visual gauges) */}
+                  {(gemWeekly || claudeWeekly) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 p-2.5">
+                      {gemWeekly && (() => {
+                        const rawGem = Math.round(gemWeekly.remaining_percentage);
+                        const gemPct = isBanned ? 0 : !acct.enabled ? 0 : rawGem;
+                        return (
+                          <div className="flex items-center justify-between gap-3 px-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-blue-400"}`} />
+                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Gemini Weekly Pool</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    isBanned
+                                      ? "bg-rose-500/40"
+                                      : !acct.enabled
+                                        ? "bg-zinc-600"
+                                        : gemPct <= 20
+                                          ? "bg-rose-500"
+                                          : gemPct <= 50
+                                            ? "bg-amber-400"
+                                            : "bg-blue-400"
+                                  }`}
+                                  style={{ width: `${gemPct}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                {isBanned ? (
+                                  <span className="text-rose-400">0%</span>
+                                ) : !acct.enabled ? (
+                                  <span className="text-[var(--text-muted)]">0%</span>
+                                ) : (
+                                  `${gemPct}%`
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      {claudeWeekly && (() => {
+                        const rawClaude = Math.round(claudeWeekly.remaining_percentage);
+                        const claudePct = isBanned ? 0 : !acct.enabled ? 0 : rawClaude;
+                        return (
+                          <div className="flex items-center justify-between gap-3 px-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-purple-400"}`} />
+                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Claude / GPT Pool</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    isBanned
+                                      ? "bg-rose-500/40"
+                                      : !acct.enabled
+                                        ? "bg-zinc-600"
+                                        : claudePct <= 20
+                                          ? "bg-rose-500"
+                                          : claudePct <= 50
+                                            ? "bg-amber-400"
+                                            : "bg-purple-400"
+                                  }`}
+                                  style={{ width: `${claudePct}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                                {isBanned ? (
+                                  <span className="text-rose-400">0%</span>
+                                ) : !acct.enabled ? (
+                                  <span className="text-[var(--text-muted)]">0%</span>
+                                ) : (
+                                  `${claudePct}%`
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
-                  {/* Main Quota Families: Gemini Models | Claude and GPT models */}
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {renderFamilyPanel("Gemini Models", geminiWeekly, gemini5h)}
-                    {renderFamilyPanel("Claude and GPT models", claudeWeekly, claude5h)}
-                  </div>
+                  {/* Models Section: Organized & Noise-free */}
+                  {availableModels.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+                        <span className="font-medium">Model Availability ({availableModels.length})</span>
+                        {sortedModels.length > 4 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleAccountExpanded(acct.id)}
+                            className="inline-flex items-center gap-1 font-medium text-[var(--accent)] hover:underline"
+                          >
+                            <span>{isExpanded ? "Show less" : `+${hasHiddenModels ? sortedModels.length - visibleModels.length : 0} more`}</span>
+                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          </button>
+                        )}
+                      </div>
 
-                  {/* Available Models Strip (unlocked only + per-model cooldown countdowns) */}
-                  {modelsList.length === 0 ? (
-                    <div className="text-xs text-[var(--text-muted)]">
-                      Click Sync to load unlocked Cloud Code models for this account.
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {visibleModels.map((mq) => {
+                          const rawPct = Math.max(0, Math.min(100, Math.round(mq.remaining_percentage)));
+                          const isInactive = isBanned || !acct.enabled;
+                          const pct = isInactive ? 0 : rawPct;
+                          const mc = cooldownMap.get(mq.model);
+                          const coolUntil = mq.failure_cooldown_until ?? mc?.cooldown_until ?? null;
+                          const failCount = mq.failure_count ?? mc?.consecutive_failures ?? 0;
+                          const modelCooling = !isInactive && !!coolUntil && coolUntil > nowMs;
+                          const chipCaps = getModelCapabilities(mq.model);
+
+                          let chipClass = "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50";
+                          if (isBanned) {
+                            chipClass = "border-rose-500/25 bg-rose-500/5 opacity-65";
+                          } else if (!acct.enabled) {
+                            chipClass = "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/25 opacity-55";
+                          } else if (modelCooling) {
+                            chipClass = "border-amber-500/30 bg-amber-500/10";
+                          } else {
+                            chipClass = getModelChipClasses(chipCaps);
+                          }
+
+                          const pctColor = isBanned
+                            ? "text-rose-400/80 font-medium line-through"
+                            : !acct.enabled
+                              ? "text-[var(--text-muted)] line-through"
+                              : pct <= 0
+                                ? "text-rose-400 font-semibold"
+                                : modelCooling
+                                  ? "text-amber-400 font-semibold"
+                                  : pct <= 35
+                                    ? "text-amber-400 font-semibold"
+                                    : "text-emerald-400 font-medium";
+
+                          return (
+                            <div
+                              key={mq.model}
+                              className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${chipClass}`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className={`truncate font-medium ${isInactive ? "text-[var(--text-muted)] line-through" : "text-[var(--text-primary)]"}`}
+                                  title={mq.display_name || mq.model}
+                                >
+                                  {mq.display_name || mq.model}
+                                </span>
+                                {!isInactive && <ModelCapabilityBadges caps={chipCaps} compact />}
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] tabular-nums">
+                                {modelCooling && (
+                                  <span className="text-amber-400">
+                                    ({failCount}f · {formatCountdown(coolUntil, nowMs)})
+                                  </span>
+                                )}
+                                <span className={pctColor}>
+                                  {isBanned ? "banned" : !acct.enabled ? "disabled" : `${pct}%`}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                      {modelsList.map((mq) => {
-                        const pct = Math.max(
-                          0,
-                          Math.min(100, Math.round(mq.remaining_percentage)),
-                        );
-                        const mc = cooldownMap.get(mq.model);
-                        const coolUntil = mq.failure_cooldown_until ?? mc?.cooldown_until ?? null;
-                        const failCount = mq.failure_count ?? mc?.consecutive_failures ?? 0;
-                        const modelCooling = !!coolUntil && coolUntil > nowMs;
-                        return (
-                          <span
-                            key={mq.model}
-                            title={
-                              modelCooling
-                                ? `${mq.display_name || mq.model} — ${failCount} consecutive failure(s), cooling ${formatCountdown(coolUntil, nowMs)}${mq.failure_reason ? ` — ${mq.failure_reason}` : ""}`
-                                : `${mq.display_name || mq.model} (${mq.model}) — ${pct}% remaining`
-                            }
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${
-                              modelCooling
-                                ? "border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[var(--warning-soft)]"
-                                : pct <= 0
-                                  ? "border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[var(--danger-soft)]"
-                                  : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]/75"
-                            }`}
-                          >
-                            <span className="font-medium text-[var(--text-primary)]">
-                              {mq.display_name || mq.model}
-                            </span>
-                            <span
-                              className="font-mono font-semibold tabular-nums"
-                              style={{ color: agPctColor(pct) }}
-                            >
-                              {pct}%
-                            </span>
-                            {modelCooling && (
-                              <span className="font-mono text-[11px] font-semibold text-[var(--warning)]">
-                                ({failCount}f &middot; {formatCountdown(coolUntil, nowMs)})
-                              </span>
-                            )}
+                    <div className="text-xs text-[var(--text-muted)] italic">
+                      Click Refresh to discover available Cloud Code models for this account.
+                    </div>
+                  )}
+
+                  {/* Notices & Banned Alerts */}
+                  {acct.last_error && (
+                    <div className="space-y-1.5 pt-1">
+                      <div
+                        className={`flex items-start gap-2 rounded-lg border px-3 py-1.5 text-xs ${
+                          isBanned
+                            ? "border-rose-500/25 bg-rose-500/10 text-rose-400"
+                            : "border-amber-500/25 bg-amber-500/10 text-amber-400"
+                        }`}
+                      >
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <span className="font-semibold">{isBanned ? "Account auto-disabled:" : "Upstream notice:"}</span>{" "}
+                          <span>
+                            {isBanned
+                              ? formatCooldownReason(acct.last_error).replace(/^account\s+auto-disabled:\s*/i, "")
+                              : formatCooldownReason(acct.last_error)}
                           </span>
-                        );
-                      })}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </article>

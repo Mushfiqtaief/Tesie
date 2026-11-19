@@ -119,14 +119,13 @@ pub async fn bridge_request_if_needed(
     }
 
     let mut transformed = false;
+    let vision_model = cfg
+        .vision_model
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("ag/gemini-3.8-flash");
 
     if needs_vision_bridge {
-        let vision_model = cfg
-            .vision_model
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or("ag/gemini-3.8-flash");
-
         let system_instruction = build_vision_system_prompt(cfg);
 
         if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
@@ -205,6 +204,37 @@ pub async fn bridge_request_if_needed(
                 *content_parts = new_parts;
             }
         }
+    }
+
+    if transformed {
+        let transcriber_provider = if vision_model.starts_with("ag/") {
+            "antigravity".to_string()
+        } else if vision_model.starts_with("ovh/") {
+            "ovh".to_string()
+        } else if vision_model.starts_with("lf/") || vision_model.starts_with("cp-") {
+            "cp-lf".to_string()
+        } else {
+            "opencode".to_string()
+        };
+
+        let target_provider = if target_model.starts_with("ag/") {
+            "antigravity".to_string()
+        } else if target_model.starts_with("ovh/") {
+            "ovh".to_string()
+        } else if target_model.starts_with("lf/") || target_model.starts_with("cp-") {
+            "cp-lf".to_string()
+        } else {
+            "opencode".to_string()
+        };
+
+        engine.record_bridge_event(tesie_core::BridgeEvent {
+            transcriber_provider,
+            target_provider,
+            transcriber_model: vision_model.to_string(),
+            target_model: target_model.to_string(),
+            kind: "image".to_string(),
+            timestamp_ms: tesie_store::now_ms(),
+        });
     }
 
     Ok(transformed)

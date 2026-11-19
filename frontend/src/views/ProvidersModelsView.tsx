@@ -1626,22 +1626,38 @@ export function ProvidersModelsView({
                       !acct.enabled ? "opacity-75" : ""
                     }`}
                   >
-                    {/* Status Corner Ribbon */}
-                    {cooling && (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-                        <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
-                      </div>
-                    )}
-                    {isBanned && (
+                    {/* Status Corner Ribbon (Unified across all account states) */}
+                    {isBanned ? (
                       <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
                         <span>Banned · Auto-disabled</span>
                       </div>
+                    ) : cooling ? (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
+                      </div>
+                    ) : !acct.enabled ? (
+                      acct.last_error && /license|gemini code assist/i.test(acct.last_error) ? (
+                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                          <span>Disabled · License Inactive</span>
+                        </div>
+                      ) : (
+                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 backdrop-blur-md shadow-sm">
+                          <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                          <span>Disabled · Inactive</span>
+                        </div>
+                      )
+                    ) : (
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 backdrop-blur-md shadow-sm">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+                        <span>Active · Serving Tokens</span>
+                      </div>
                     )}
 
                     {/* Header: Identity & Unified Action Toolbar */}
-                    <div className={`flex flex-col sm:flex-row sm:items-start justify-between gap-3 ${cooling || isBanned ? "sm:pr-36" : ""}`}>
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:pr-48">
                       {/* Identity Column */}
                       <div className="flex flex-col gap-1.5 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -1655,13 +1671,6 @@ export function ProvidersModelsView({
                             <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold uppercase text-[var(--accent)]">
                               {acct.quota.plan}
                             </span>
-                          )}
-                          {!isBanned && !cooling && (
-                            acct.enabled ? (
-                              <StatusPill tone="success" dot>Ready</StatusPill>
-                            ) : (
-                              <StatusPill tone="neutral">Disabled</StatusPill>
-                            )
                           )}
                         </div>
 

@@ -3,6 +3,7 @@ import {
   Activity,
   Blocks,
   Cpu,
+  Eye,
   Maximize2,
   Minus,
   Plus,
@@ -115,6 +116,37 @@ export function LiveTopologyMap({
       logicalH: Math.max(240, totalSpan + 130),
     };
   }, [providers, activeProviderIds, lastProvider, errorProvider]);
+
+  const bridgeConnection = useMemo(() => {
+    const ev = topology?.bridge_event;
+    if (!ev) return null;
+    const transcriber = flowLayout.providerNodes.find(
+      (n) => n.id.toLowerCase() === ev.transcriber_provider.toLowerCase(),
+    );
+    const target = flowLayout.providerNodes.find(
+      (n) => n.id.toLowerCase() === ev.target_provider.toLowerCase(),
+    );
+    if (!transcriber || !target || transcriber.id === target.id) return null;
+
+    const x0 = transcriber.x + 30;
+    const y0 = transcriber.y;
+    const x1 = target.x + 30;
+    const y1 = target.y;
+    const arcDist = Math.abs(y1 - y0);
+    const arcOffset = Math.max(55, Math.min(110, arcDist * 0.65));
+    const cpx = Math.max(x0, x1) + arcOffset;
+    const path = `M ${x0} ${y0} C ${cpx} ${y0}, ${cpx} ${y1}, ${x1} ${y1}`;
+
+    return {
+      transcriber,
+      target,
+      path,
+      badgeX: cpx + 10,
+      badgeY: (y0 + y1) / 2,
+      model: ev.transcriber_model,
+      kind: ev.kind,
+    };
+  }, [topology?.bridge_event, flowLayout.providerNodes]);
 
   const fitView = useCallback(() => {
     const { width, height } = containerSize;
@@ -364,7 +396,75 @@ export function LiveTopologyMap({
                   </g>
                 );
               })}
+              {/* Multimodal Bridge Inter-Provider Arc */}
+              {bridgeConnection && (
+                <g key="multimodal-bridge-connection">
+                  <defs>
+                    <linearGradient id="multimodalBridgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#38bdf8" />
+                      <stop offset="50%" stopColor="#c084fc" />
+                      <stop offset="100%" stopColor="#38bdf8" />
+                    </linearGradient>
+                  </defs>
+                  {/* Soft Vector Glow */}
+                  <path
+                    d={bridgeConnection.path}
+                    fill="none"
+                    stroke="#38bdf8"
+                    strokeWidth={8}
+                    strokeOpacity={0.2}
+                    strokeLinecap="round"
+                  />
+                  {/* Animated Dashed Bridge Curve */}
+                  <path
+                    d={bridgeConnection.path}
+                    fill="none"
+                    stroke="url(#multimodalBridgeGrad)"
+                    strokeWidth={2.75}
+                    strokeDasharray="6 4"
+                    strokeLinecap="round"
+                    className="topology-active-edge"
+                  />
+                  {/* Flowing Transcribing Particle */}
+                  <circle r={4.5} fill="#38bdf8" opacity={0.95}>
+                    <animateMotion
+                      dur="1.35s"
+                      repeatCount="indefinite"
+                      path={bridgeConnection.path}
+                    />
+                  </circle>
+                  <circle
+                    cx={bridgeConnection.transcriber.x + 30}
+                    cy={bridgeConnection.transcriber.y}
+                    r={4}
+                    fill="#38bdf8"
+                  />
+                  <circle
+                    cx={bridgeConnection.target.x + 30}
+                    cy={bridgeConnection.target.y}
+                    r={4}
+                    fill="#c084fc"
+                  />
+                </g>
+              )}
             </svg>
+
+            {/* Live Multimodal Bridge Floating Indicator */}
+            {bridgeConnection && (
+              <div
+                style={{
+                  left: bridgeConnection.badgeX,
+                  top: bridgeConnection.badgeY,
+                  transform: "translate(0, -50%)",
+                }}
+                className="pointer-events-none absolute z-20 flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-[var(--bg-canvas)]/90 px-3 py-1 font-mono text-[11px] font-semibold text-sky-300 shadow-lg backdrop-blur-md animate-pulse"
+              >
+                <Eye className="h-3.5 w-3.5 text-sky-400" />
+                <span>
+                  Bridge: {bridgeConnection.transcriber.name} → {bridgeConnection.target.name}
+                </span>
+              </div>
+            )}
 
             {/* Stage 1 (Left): Client Ingress — Pure Icon Tile */}
             <div

@@ -7,6 +7,8 @@ import type {
   ApplyOpenCodeCliPayload,
   AuthStatusResponse,
   BackupImportResponse,
+  BridgeEvent,
+  BridgeStats,
   ClaudeCliStatus,
   CliToolsStatusMap,
   CodexCliStatus,
@@ -607,6 +609,20 @@ export const api = {
   ): Promise<{ config: MultimodalBridgeConfig }> => {
     return requestJson<{ config: MultimodalBridgeConfig }>("/api/admin/bridge", {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getBridgeStats: async (): Promise<{ stats: BridgeStats }> => {
+    return requestJson<{ stats: BridgeStats }>("/api/admin/bridge/stats");
+  },
+
+  simulateBridgeEvent: async (
+    payload: Partial<BridgeEvent>,
+  ): Promise<{ ok: boolean; event: BridgeEvent }> => {
+    return requestJson<{ ok: boolean; event: BridgeEvent }>("/api/admin/bridge/simulate-event", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });

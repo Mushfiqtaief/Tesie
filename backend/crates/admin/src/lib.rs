@@ -164,6 +164,8 @@ pub fn admin_router(state: AdminState) -> Router {
                 .put(update_bridge_config)
                 .patch(update_bridge_config),
         )
+        .route("/bridge/stats", get(get_bridge_stats))
+        .route("/bridge/simulate-event", post(simulate_bridge_event))
         .layer(middleware::from_fn_with_state(state.clone(), require_admin_auth))
         .with_state(state)
 }
@@ -1346,6 +1348,23 @@ async fn get_topology(
             updated_at: tesie_store::now_ms(),
         });
     let ovh_usage = usage.by_provider.iter().find(|p| p.provider_id == "ovh");
+    let now_ts = tesie_store::now_ms();
+    let ovh_cands = state
+        .store
+        .quotas()
+        .select_healthy_ovh_candidates(now_ts, &ovh_cfg, |p| {
+            mihomo_states
+                .as_ref()
+                .and_then(|m| m.get(&p.name))
+                .map(|s| s.alive)
+                .unwrap_or(p.alive)
+        })
+        .await
+        .unwrap_or_default();
+    let ovh_active = ovh_cands.len();
+    let ovh_total = proxies.len();
+    let ovh_cooling = ovh_total.saturating_sub(ovh_active);
+
     providers.push(json!({
         "id": "ovh",
         "name": "OVHcloud",
@@ -1355,8 +1374,8 @@ async fn get_topology(
         "quota_strategy": "ip_pool",
         "selection_strategy": normalize_routing_strategy(&ovh_cfg.routing_strategy, default_routing_strategy_for("ovh")),
         "proxy_mode": ovh_cfg.proxy_mode,
-        "active_units": active_ips,
-        "cooling_units": 0,
+        "active_units": ovh_active,
+        "cooling_units": ovh_cooling,
         "total_requests": ovh_usage.map(|x| x.total_requests).unwrap_or(0),
         "total_tokens": ovh_usage.map(|x| x.total_tokens).unwrap_or(0),
         "avg_tokens_per_sec": ovh_usage.map(|x| x.avg_tokens_per_sec).unwrap_or(0.0)
@@ -1420,6 +1439,8 @@ async fn get_topology(
         "active_requests": active_requests,
         "last_provider": last_provider,
         "error_provider": error_provider,
+        "bridge_event": state.engine.last_bridge_event(),
+        "bridge_stats": state.engine.bridge_stats(),
         "proxy_summary": {
             "total_proxies": proxies.iter().filter(|p| !p.is_direct).count(),
             "healthy_proxies": healthy_proxies,
@@ -1542,6 +1563,69 @@ async fn get_provider_quotas(
             "refreshed_at": now
         }));
     }
+
+    let ovh_cfg = state
+        .store
+        .provider_configs()
+        .get_or_default("ovh")
+        .await
+        .unwrap_or_else(|_| tesie_core::ProviderConfig {
+            provider_id: "ovh".into(),
+            enabled: true,
+            proxy_mode: "all".into(),
+            selected_proxy_ids: Vec::new(),
+            window_duration_ms: 60_000,
+            max_requests_per_window: Some(2),
+            max_tokens_per_window: None,
+            session_ttl_ms: 14_400_000,
+            thinking_level: "auto".into(),
+            probe_enabled: false,
+            probe_interval_sec: 60,
+            routing_strategy: "round-robin".into(),
+            updated_at: now,
+        });
+    let ovh_strategy = normalize_routing_strategy(
+        &ovh_cfg.routing_strategy,
+        default_routing_strategy_for("ovh"),
+    );
+    let ovh_cands = state
+        .store
+        .quotas()
+        .select_healthy_ovh_candidates(now, &ovh_cfg, |_| true)
+        .await
+        .unwrap_or_default();
+    let ovh_active = ovh_cands.len();
+    let ovh_proxies = state
+        .store
+        .proxies()
+        .list_for_provider_config(&ovh_cfg)
+        .await
+        .unwrap_or_default();
+    let ovh_total = ovh_proxies.len();
+    let ovh_cooling = ovh_total.saturating_sub(ovh_active);
+
+    providers.push(json!({
+        "id": "ovh",
+        "name": "OVHcloud",
+        "description": "Per-IP rate tracking across proxy pool (2 requests/minute per IP) with automatic cooldown and rolling 60s windows.",
+        "strategy": "ip_pool",
+        "selection_strategy": ovh_strategy,
+        "routing_strategy": ovh_strategy,
+        "unit_label": "Exit IP",
+        "active_count": ovh_active,
+        "cooling_count": ovh_cooling,
+        "probed_count": ovh_total,
+        "quotas_count": ovh_total,
+        "proxy_mode": ovh_cfg.proxy_mode,
+        "window_duration_ms": ovh_cfg.window_duration_ms,
+        "default_max_requests": ovh_cfg.max_requests_per_window,
+        "default_max_tokens": ovh_cfg.max_tokens_per_window,
+        "probe_enabled": false,
+        "probe_interval_sec": 60,
+        "probe_status": json!({ "status": "idle" }),
+        "refresh_interval_sec": 60,
+        "refreshed_at": now
+    }));
 
     Ok(Json(json!({
         "providers": providers,
@@ -2904,6 +2988,38 @@ async fn update_bridge_config(
     }
     state.store.bridge().save_config(&cfg).await.map_err(err_resp)?;
     Ok(Json(json!({ "config": cfg })))
+}
+
+async fn get_bridge_stats(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let stats = state.engine.bridge_stats();
+    Ok(Json(json!({ "stats": stats })))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SimulateBridgeInput {
+    pub transcriber_provider: Option<String>,
+    pub target_provider: Option<String>,
+    pub transcriber_model: Option<String>,
+    pub target_model: Option<String>,
+    pub kind: Option<String>,
+}
+
+async fn simulate_bridge_event(
+    State(state): State<AdminState>,
+    Json(input): Json<SimulateBridgeInput>,
+) -> std::result::Result<Json<Value>, Response> {
+    let event = tesie_core::BridgeEvent {
+        transcriber_provider: input.transcriber_provider.unwrap_or_else(|| "antigravity".into()),
+        target_provider: input.target_provider.unwrap_or_else(|| "opencode".into()),
+        transcriber_model: input.transcriber_model.unwrap_or_else(|| "ag/gemini-3.8-flash".into()),
+        target_model: input.target_model.unwrap_or_else(|| "oc/deepseek-v4.1-flash-free".into()),
+        kind: input.kind.unwrap_or_else(|| "image".into()),
+        timestamp_ms: tesie_store::now_ms(),
+    };
+    state.engine.record_bridge_event(event.clone());
+    Ok(Json(json!({ "ok": true, "event": event })))
 }
 
 fn err_resp(err: TesRouteError) -> Response {
