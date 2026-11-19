@@ -19,7 +19,7 @@ export function getModelCapabilities(
   const hasVision = Boolean(
     entry?.attachment === true ||
     entryMods.includes("image") ||
-    /gemini|claude-3|claude-sonnet|claude-opus|gpt-4o|gpt-4-turbo|gpt-4.5|o1|o3|-vl|vision|internvl|qwen-vl|qwen2\.5-vl|qwen3-vl|pixtral|llava|glm-4v|deepseek-v4\.1|glm-5\.3|mimo-v2\.[56]|mimo-v2-omni|longcat-2\.5|hy4-flash|inkling-2|super-vl|kimi-k2|qwen3|minimax-m3|step-5|crouton|exo-free|pulse-alpha|muse-spark/i.test(
+    /gemini|claude|sonnet|opus|haiku|gpt-4o|gpt-4-turbo|gpt-4\.5|gpt-5|o1|o3|o4|-vl|_vl|vision|-vlm|_vlm|internvl|llava|pixtral|molmo|cogvlm|florence|qwen.*vl|qwen.*vision|deepseek-v4|deepseek-vl|glm-4v|glm-5v|glm-5\.3|mimo-v2\.[56]|mimo-v2-omni|longcat-2\.5|hy4-flash|inkling-2|super-vl|kimi-k2|minimax-m3|step-5|crouton|exo-free|pulse-alpha|muse-spark/i.test(
       modelSlug,
     )
   );

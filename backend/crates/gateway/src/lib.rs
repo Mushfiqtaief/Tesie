@@ -209,24 +209,6 @@ async fn handle_gateway_request(
     let ts_report =
         apply_token_saver_to_request(&mut body, source_format, &header_pairs, &ts_cfg);
 
-    // Multimodal Bridge: Transcribe images/audio if target model lacks native capability
-    let bridge_cfg = state
-        .store
-        .bridge()
-        .get_config()
-        .await
-        .unwrap_or_default();
-    let _ = bridge_request_if_needed(
-        &state.engine,
-        &mut body,
-        source_format,
-        &raw_model,
-        &header_pairs,
-        &api_key_id,
-        &bridge_cfg,
-    )
-    .await;
-
     // Check if the requested model matches a Combo (`<name>` or `combo/<name>`)
     let combo_lookup = raw_model.strip_prefix("combo/").unwrap_or(&raw_model);
     let maybe_combo = state
@@ -236,6 +218,14 @@ async fn handle_gateway_request(
         .await
         .ok()
         .flatten();
+
+    // Multimodal Bridge configuration
+    let bridge_cfg = state
+        .store
+        .bridge()
+        .get_config()
+        .await
+        .unwrap_or_default();
 
     let (provider_resp, resolved_combo_name) = if let Some(combo) = maybe_combo {
         if !combo.enabled {
@@ -259,6 +249,19 @@ async fn handle_gateway_request(
             if let Some(obj) = candidate_body.as_object_mut() {
                 obj.insert("model".into(), Value::String(candidate_model.clone()));
             }
+
+            // Transcribe images/audio ONLY if this specific target candidate model lacks native capability
+            let _ = bridge_request_if_needed(
+                &state.engine,
+                &mut candidate_body,
+                source_format,
+                &candidate_model,
+                &header_pairs,
+                &api_key_id,
+                &bridge_cfg,
+            )
+            .await;
+
             match state
                 .engine
                 .execute_chat(ProviderRequest {
@@ -291,6 +294,18 @@ async fn handle_gateway_request(
             }
         }
     } else {
+        // Direct model: transcribe images/audio ONLY if this target model lacks native capability
+        let _ = bridge_request_if_needed(
+            &state.engine,
+            &mut body,
+            source_format,
+            &raw_model,
+            &header_pairs,
+            &api_key_id,
+            &bridge_cfg,
+        )
+        .await;
+
         match state
             .engine
             .execute_chat(ProviderRequest {

@@ -7,46 +7,110 @@ use crate::aggregator::drain_and_aggregate;
 
 pub fn model_supports_vision(model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
-    lower.contains("gemini")
-        || lower.contains("claude-3")
-        || lower.contains("claude-sonnet")
-        || lower.contains("claude-opus")
-        || lower.contains("gpt-4o")
-        || lower.contains("gpt-4-turbo")
-        || lower.contains("o1")
-        || lower.contains("o3")
-        || lower.contains("-vl")
-        || lower.contains("vision")
-        || lower.contains("internvl")
-        || lower.contains("qwen-vl")
-        || lower.contains("pixtral")
-        || lower.contains("llava")
-        || lower.contains("deepseek-v4.1")
-        || lower.contains("glm-5.3")
-        || lower.contains("mimo-v2.6")
-        || lower.contains("mimo-v2.5")
-        || lower.contains("mimo-v2-omni")
-        || lower.contains("longcat-2.5")
-        || lower.contains("hy4-flash")
-        || lower.contains("inkling-2")
-        || lower.contains("super-vl")
-        || lower.contains("kimi-k2")
-        || lower.contains("qwen3")
-        || lower.contains("minimax-m3")
-        || lower.contains("step-5")
-        || lower.contains("crouton")
-        || lower.contains("exo-free")
-        || lower.contains("pulse-alpha")
-        || lower.contains("muse-spark")
+    // Strip reasoning effort or capability levels: e.g. "ag/gemini-3.8-flash(high)" -> "ag/gemini-3.8-flash"
+    let clean = if let Some(idx) = lower.find('(') {
+        &lower[..idx]
+    } else {
+        &lower
+    };
+    let clean = clean.trim();
+
+    // 1. Google Gemini family: all native Gemini models support vision
+    if clean.contains("gemini") {
+        return true;
+    }
+
+    // 2. Anthropic Claude family: any Claude (Claude 3, 3.5, 3.7, 4), or sonnet, opus, haiku
+    if clean.contains("claude")
+        || clean.contains("sonnet")
+        || clean.contains("opus")
+        || clean.contains("haiku")
+    {
+        return true;
+    }
+
+    // 3. OpenAI GPT family with vision: gpt-4o, gpt-4-turbo, gpt-4.5, gpt-5, o1, o3, o4
+    if clean.contains("gpt-4o")
+        || clean.contains("gpt-4-turbo")
+        || clean.contains("gpt-4.5")
+        || clean.contains("gpt-5")
+        || clean.contains("o1")
+        || clean.contains("o3")
+        || clean.contains("o4")
+    {
+        return true;
+    }
+
+    // 4. Vision markers: -vl, _vl, vision, -vlm, _vlm
+    if clean.contains("-vl")
+        || clean.contains("_vl")
+        || clean.contains("vision")
+        || clean.contains("-vlm")
+        || clean.contains("_vlm")
+    {
+        return true;
+    }
+
+    // 5. OpenCode & Open-weight vision models:
+    // - DeepSeek vision models: deepseek-v4, deepseek-v4.1, deepseek-vl, deepseek-vl2
+    // - GLM vision models: glm-4v, glm-4.5v, glm-5v, glm-5.3
+    // - MiMo vision models: mimo-v2.6, mimo-v2.5, mimo-v2-omni
+    // - LongCat vision: longcat-2.5
+    // - HY4 vision: hy4-flash
+    // - Inkling vision: inkling-2
+    // - Nemotron Super VL: super-vl
+    // - Specialized vision families: pixtral, llava, internvl, kimi-k2, minimax-m3, step-5, crouton, exo-free, pulse-alpha, muse-spark, molmo, cogvlm, florence
+    if clean.contains("deepseek-v4")
+        || clean.contains("deepseek-vl")
+        || clean.contains("glm-4v")
+        || clean.contains("glm-5v")
+        || clean.contains("glm-5.3")
+        || clean.contains("mimo-v2.6")
+        || clean.contains("mimo-v2.5")
+        || clean.contains("mimo-v2-omni")
+        || clean.contains("longcat-2.5")
+        || clean.contains("hy4-flash")
+        || clean.contains("inkling-2")
+        || clean.contains("super-vl")
+        || clean.contains("kimi-k2")
+        || clean.contains("minimax-m3")
+        || clean.contains("step-5")
+        || clean.contains("crouton")
+        || clean.contains("exo-free")
+        || clean.contains("pulse-alpha")
+        || clean.contains("muse-spark")
+        || clean.contains("pixtral")
+        || clean.contains("llava")
+        || clean.contains("internvl")
+        || clean.contains("molmo")
+        || clean.contains("cogvlm")
+        || clean.contains("florence")
+    {
+        return true;
+    }
+
+    // 6. Qwen VL specifically (requires 'vl' or 'vision' so text-only Qwen3 models like Qwen3.6-27B are not falsely matched)
+    if clean.contains("qwen") && (clean.contains("vl") || clean.contains("vision")) {
+        return true;
+    }
+
+    false
 }
 
 pub fn model_supports_audio(model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
-    lower.contains("gemini")
-        || lower.contains("gpt-4o-audio")
-        || lower.contains("whisper")
-        || lower.contains("muse")
-        || lower.contains("mimo")
+    let clean = if let Some(idx) = lower.find('(') {
+        &lower[..idx]
+    } else {
+        &lower
+    };
+    let clean = clean.trim();
+
+    clean.contains("gemini")
+        || clean.contains("gpt-4o-audio")
+        || clean.contains("whisper")
+        || clean.contains("muse")
+        || clean.contains("mimo")
 }
 
 pub fn request_has_multimodal(body: &Value, _source_format: WireFormat) -> (bool, bool) {
@@ -267,4 +331,66 @@ fn extract_content_from_agg(agg: &Value) -> String {
     }
 
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vision_models_detection() {
+        // Antigravity models
+        assert!(model_supports_vision("ag/gemini-2.5-flash"));
+        assert!(model_supports_vision("ag/gemini-3.8-flash(high)"));
+        assert!(model_supports_vision("ag/claude-sonnet-4-6"));
+        assert!(model_supports_vision("claude-sonnet-4.6"));
+        assert!(model_supports_vision("claude-opus-4-6-thinking"));
+        assert!(model_supports_vision("claude-3-7-sonnet"));
+        assert!(model_supports_vision("sonnet-4"));
+        assert!(model_supports_vision("opus-4"));
+        assert!(model_supports_vision("claude-3.5-haiku"));
+
+        // OpenCode models
+        assert!(model_supports_vision("oc/deepseek-v4.1-flash-free"));
+        assert!(model_supports_vision("oc/deepseek-v4.1-flash-free(auto)"));
+        assert!(model_supports_vision("mimo-v2.6-flash-free"));
+        assert!(model_supports_vision("glm-5.3-flash-free"));
+        assert!(model_supports_vision("nemotron-3.5-super-vl-free"));
+        assert!(model_supports_vision("longcat-2.5-free"));
+        assert!(model_supports_vision("hy4-flash-free"));
+        assert!(model_supports_vision("inkling-2-small-free"));
+
+        // OVHcloud models
+        assert!(model_supports_vision("ovh/Qwen2.5-VL-72B-Instruct"));
+        assert!(model_supports_vision("ovh/qwen3-vl-30b-a3b"));
+
+        // Custom Provider models
+        assert!(model_supports_vision("cp-lf/deepseek-v4.1-flash-1017"));
+        assert!(model_supports_vision("cp-lf/glm-4v"));
+        assert!(model_supports_vision("cp-lf/gpt-4o"));
+        assert!(model_supports_vision("pixtral-12b"));
+        assert!(model_supports_vision("meta-llama/llama-3.2-11b-vision-instruct"));
+
+        // Text-only models that MUST return false
+        assert!(!model_supports_vision("oc/beam-free"));
+        assert!(!model_supports_vision("oc/iceman-free"));
+        assert!(!model_supports_vision("oc/flint-40b-free"));
+        assert!(!model_supports_vision("big-pickle"));
+        assert!(!model_supports_vision("oc/deepseek-v3"));
+        assert!(!model_supports_vision("Meta-Llama-3_3-70B-Instruct"));
+        assert!(!model_supports_vision("Mistral-Small-3.2-24B-Instruct-2506"));
+        assert!(!model_supports_vision("Qwen3.6-27B"));
+        assert!(!model_supports_vision("Qwen3.5-397B-A17B"));
+        assert!(!model_supports_vision("Qwen3.5-9B"));
+        assert!(!model_supports_vision("gpt-3.5-turbo"));
+    }
+
+    #[test]
+    fn test_audio_models_detection() {
+        assert!(model_supports_audio("ag/gemini-2.5-flash"));
+        assert!(model_supports_audio("ag/gemini-3.8-flash(high)"));
+        assert!(model_supports_audio("ovh/whisper-large-v3-turbo"));
+        assert!(!model_supports_audio("ag/claude-sonnet-4-6"));
+        assert!(!model_supports_audio("oc/beam-free"));
+    }
 }

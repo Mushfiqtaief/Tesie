@@ -124,10 +124,33 @@ fn infer_model_capabilities(
 ) -> (Option<bool>, Option<bool>, Option<Vec<String>>, Option<bool>) {
     let lower = id.to_ascii_lowercase();
     let is_gemini = lower.contains("gemini");
-    let is_claude = lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus");
-    let is_gpt_vis = lower.contains("gpt-4o") || lower.contains("o1") || lower.contains("o3") || lower.contains("gpt-4.5");
-    let is_vl = lower.contains("-vl") || lower.contains("vision") || lower.contains("internvl") || lower.contains("qwen-vl") || lower.contains("llava");
-    let is_opencode_vision = lower.contains("deepseek-v4.1")
+    let is_claude = lower.contains("claude")
+        || lower.contains("sonnet")
+        || lower.contains("opus")
+        || lower.contains("haiku");
+    let is_gpt_vis = lower.contains("gpt-4o")
+        || lower.contains("gpt-4-turbo")
+        || lower.contains("o1")
+        || lower.contains("o3")
+        || lower.contains("o4")
+        || lower.contains("gpt-4.5")
+        || lower.contains("gpt-5");
+    let is_vl = lower.contains("-vl")
+        || lower.contains("_vl")
+        || lower.contains("vision")
+        || lower.contains("-vlm")
+        || lower.contains("_vlm")
+        || lower.contains("internvl")
+        || lower.contains("llava")
+        || lower.contains("pixtral")
+        || lower.contains("molmo")
+        || lower.contains("cogvlm")
+        || lower.contains("florence")
+        || (lower.contains("qwen") && (lower.contains("vl") || lower.contains("vision")));
+    let is_opencode_vision = lower.contains("deepseek-v4")
+        || lower.contains("deepseek-vl")
+        || lower.contains("glm-4v")
+        || lower.contains("glm-5v")
         || lower.contains("glm-5.3")
         || lower.contains("mimo-v2.6")
         || lower.contains("mimo-v2.5")
@@ -137,7 +160,6 @@ fn infer_model_capabilities(
         || lower.contains("inkling-2")
         || lower.contains("super-vl")
         || lower.contains("kimi-k2")
-        || lower.contains("qwen3")
         || lower.contains("minimax-m3")
         || lower.contains("step-5")
         || lower.contains("crouton")
