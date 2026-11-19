@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tesie_core::{
     AntigravityQuotaSnapshot, ProviderKind, canonical_antigravity_model,
@@ -14,6 +14,16 @@ use tesie_store::{Store, now_ms};
 
 const CACHE_TTL_MS: i64 = 10 * 60 * 1000;
 const CAPABILITIES_URL: &str = "https://models.opencode.ai/api.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelLimitInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<i64>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenAiModelEntry {
@@ -34,6 +44,71 @@ pub struct OpenAiModelEntry {
     pub tool_call: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modalities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<ModelLimitInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
+}
+
+fn infer_model_limits(
+    id: &str,
+    live_limit: Option<ModelLimitInfo>,
+) -> (Option<ModelLimitInfo>, Option<i64>, Option<i64>) {
+    if let Some(lim) = live_limit {
+        let ctx = lim.context.or(lim.input);
+        let out = lim.output;
+        return (Some(lim), ctx, out);
+    }
+
+    let lower = id.to_ascii_lowercase();
+    let (ctx, inp, out) = if lower.contains("gemini") {
+        (Some(1_048_576), None, Some(65_536))
+    } else if lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus") {
+        (Some(200_000), None, Some(64_000))
+    } else if lower.contains("gpt-5") || lower.contains("gpt-6") {
+        (Some(1_050_000), None, Some(128_000))
+    } else if lower.contains("gpt-4o") {
+        (Some(128_000), None, Some(16_384))
+    } else if lower.contains("o1") || lower.contains("o3") {
+        (Some(200_000), None, Some(100_000))
+    } else if lower.contains("deepseek-v4.1-flash") {
+        if lower.contains("free") {
+            (Some(200_000), None, Some(32_000))
+        } else {
+            (Some(1_000_000), None, Some(384_000))
+        }
+    } else if lower.contains("glm-5.3") || lower.contains("mimo-v2.6") || lower.contains("mimo-v2.5") {
+        (Some(200_000), None, Some(32_000))
+    } else if lower.contains("hy4-flash") {
+        (Some(1_048_576), Some(983_040), Some(65_536))
+    } else if lower.contains("longcat-2.5") {
+        (Some(1_000_000), None, Some(262_144))
+    } else if lower.contains("inkling-2")
+        || lower.contains("beam-free")
+        || lower.contains("muse-spark")
+        || lower.contains("nemotron-3.5-super-vl")
+    {
+        (Some(1_048_576), None, Some(131_072))
+    } else if lower.contains("flint-40b") || lower.contains("nemotron-3.5-lightning") {
+        (Some(262_144), None, Some(if lower.contains("lightning") { 262_144 } else { 65_536 }))
+    } else if lower.contains("kimi-k2") {
+        (Some(262_144), None, Some(262_144))
+    } else if lower.contains("deepseek") || lower.contains("r1") {
+        (Some(64_000), None, Some(8_192))
+    } else if lower.contains("qwen") || lower.contains("llama") {
+        (Some(131_072), None, Some(8_192))
+    } else {
+        (Some(128_000), None, Some(4_096))
+    };
+
+    let lim = ModelLimitInfo {
+        context: ctx,
+        input: inp,
+        output: out,
+    };
+    (Some(lim), ctx, out)
 }
 
 fn infer_model_capabilities(
@@ -138,6 +213,8 @@ impl ModelCatalogCache {
                 if seen.insert(c.name.clone()) {
                     let (attachment, reasoning, modalities, tool_call) =
                         infer_model_capabilities(&c.name, None, None, None, None);
+                    let (limit, context_length, max_output_tokens) =
+                        infer_model_limits(&c.name, None);
                     out.push(OpenAiModelEntry {
                         display_name: c.name.clone(),
                         id: c.name,
@@ -150,6 +227,9 @@ impl ModelCatalogCache {
                         reasoning,
                         modalities,
                         tool_call,
+                        limit,
+                        context_length,
+                        max_output_tokens,
                     });
                 }
             }
@@ -186,6 +266,8 @@ impl ModelCatalogCache {
                         );
                         let (attachment, reasoning, modalities, tool_call) =
                             infer_model_capabilities(m.id, None, None, None, None);
+                        let (limit, context_length, max_output_tokens) =
+                            infer_model_limits(m.id, None);
                         out.push(OpenAiModelEntry {
                             id: m.id.to_string(),
                             object: "model",
@@ -198,6 +280,9 @@ impl ModelCatalogCache {
                             reasoning,
                             modalities,
                             tool_call,
+                            limit,
+                            context_length,
+                            max_output_tokens,
                         });
                     }
                 }
@@ -259,6 +344,8 @@ impl ModelCatalogCache {
                             );
                             let (attachment, reasoning, modalities, tool_call) =
                                 infer_model_capabilities(&id, None, None, None, None);
+                            let (limit, context_length, max_output_tokens) =
+                                infer_model_limits(&id, None);
                             out.push(OpenAiModelEntry {
                                 display_name: display_name_for_model(ProviderKind::Antigravity, &id),
                                 id,
@@ -271,6 +358,9 @@ impl ModelCatalogCache {
                                 reasoning,
                                 modalities,
                                 tool_call,
+                                limit,
+                                context_length,
+                                max_output_tokens,
                             });
                         }
                     }
@@ -285,6 +375,8 @@ impl ModelCatalogCache {
                             );
                             let (attachment, reasoning, modalities, tool_call) =
                                 infer_model_capabilities(m.id, None, None, None, None);
+                            let (limit, context_length, max_output_tokens) =
+                                infer_model_limits(m.id, None);
                             out.push(OpenAiModelEntry {
                                 id: m.id.to_string(),
                                 object: "model",
@@ -297,6 +389,9 @@ impl ModelCatalogCache {
                                 reasoning,
                                 modalities,
                                 tool_call,
+                                limit,
+                                context_length,
+                                max_output_tokens,
                             });
                         }
                     }
@@ -332,6 +427,8 @@ impl ModelCatalogCache {
                     if seen.insert(full_id.clone()) {
                         let (attachment, reasoning, modalities, tool_call) =
                             infer_model_capabilities(&m, None, None, None, None);
+                        let (limit, context_length, max_output_tokens) =
+                            infer_model_limits(&m, None);
                         out.push(OpenAiModelEntry {
                             id: full_id,
                             object: "model",
@@ -344,6 +441,9 @@ impl ModelCatalogCache {
                             reasoning,
                             modalities,
                             tool_call,
+                            limit,
+                            context_length,
+                            max_output_tokens,
                         });
                     }
                 }
@@ -460,6 +560,11 @@ impl ModelCatalogCache {
                         live_modalities,
                         live_tool_call,
                     );
+                    let live_limit: Option<ModelLimitInfo> = m
+                        .get("limit")
+                        .and_then(|lim_val| serde_json::from_value(lim_val.clone()).ok());
+                    let (limit, context_length, max_output_tokens) =
+                        infer_model_limits(&id, live_limit);
                     let display_name = m
                         .get("name")
                         .and_then(Value::as_str)
@@ -478,6 +583,9 @@ impl ModelCatalogCache {
                         reasoning,
                         modalities,
                         tool_call,
+                        limit,
+                        context_length,
+                        max_output_tokens,
                     });
                 }
             }

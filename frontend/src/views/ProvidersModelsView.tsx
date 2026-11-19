@@ -32,14 +32,16 @@ import {
   Trash2,
   UserCheck,
   Volume2,
+  Layers,
   Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ProbeSettingsBar } from "../components/ProbeSettingsBar";
-import { ModelCapabilityBadges } from "../components/ModelCapabilityBadges";
+import { ModelCapabilityBadges, ModelLimitBadge } from "../components/ModelCapabilityBadges";
 import {
   getModelCapabilities,
+  getModelLimits,
   getModelCardClasses,
   getModelChipClasses,
 } from "../utils/modelCapabilities";
@@ -2182,6 +2184,12 @@ export function ProvidersModelsView({
                 <span className="text-emerald-400 font-medium">Green Badge</span>
                 <span className="text-[var(--text-muted)]">= Audio</span>
               </span>
+              <span className="text-[var(--border-subtle)]">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+                <span className="text-[var(--text-secondary)] font-medium">Pill Badge</span>
+                <span className="text-[var(--text-muted)]">= Context & Output Limit</span>
+              </span>
             </div>
             <div className="font-mono text-[11px] text-[var(--text-muted)]">
               Showing {filteredModels.length} of {providerModels.length} models
@@ -2207,6 +2215,7 @@ export function ProvidersModelsView({
                 modelsEntryMap.get(fullSpec.toLowerCase()) ||
                 modelsEntryMap.get(modelSlug.toLowerCase());
               const caps = getModelCapabilities(fullSpec, modelEntry);
+              const limits = getModelLimits(fullSpec, modelEntry);
               const cardAccents = getModelCardClasses(caps);
 
               return (
@@ -2220,6 +2229,8 @@ export function ProvidersModelsView({
                   title={
                     isLockedForUser
                       ? `${fullSpec} is not unlocked on your connected Antigravity account(s)`
+                      : limits?.tooltip
+                      ? `${fullSpec} (${limits.tooltip})`
                       : fullSpec
                   }
                 >
@@ -2231,6 +2242,7 @@ export function ProvidersModelsView({
 
                     <div className="flex flex-wrap items-center gap-1.5">
                       <ModelCapabilityBadges caps={caps} />
+                      <ModelLimitBadge limits={limits} />
                       {(isLockedForUser || agState) && (
                         <div className="text-[11px]">
                           {isLockedForUser ? (

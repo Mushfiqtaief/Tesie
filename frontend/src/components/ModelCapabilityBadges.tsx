@@ -1,5 +1,38 @@
-import { Eye, Brain, Volume2 } from "lucide-react";
-import type { ModelCapabilities } from "../utils/modelCapabilities";
+import { Eye, Brain, Volume2, Layers } from "lucide-react";
+import type { ModelCapabilities, ModelLimits } from "../utils/modelCapabilities";
+
+export function ModelLimitBadge({
+  limits,
+  compact = false,
+}: {
+  limits: ModelLimits | null | undefined;
+  compact?: boolean;
+}) {
+  if (!limits || !limits.badgeLabel) {
+    return null;
+  }
+
+  if (compact) {
+    return (
+      <span
+        title={limits.tooltip}
+        className="inline-flex items-center gap-1 font-mono text-[9px] text-[var(--text-muted)] bg-[var(--bg-elevated)]/60 px-1 py-0.5 border border-[var(--border-subtle)] rounded cursor-help"
+      >
+        {limits.badgeLabel}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title={limits.tooltip}
+      className="inline-flex items-center gap-1 rounded bg-[var(--bg-elevated)]/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors cursor-help shadow-2xs"
+    >
+      <Layers className="h-2.5 w-2.5 text-[var(--text-muted)] shrink-0" />
+      <span>{limits.badgeLabel}</span>
+    </span>
+  );
+}
 
 export function ModelCapabilityBadges({
   caps,

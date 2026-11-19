@@ -33,8 +33,12 @@ import type {
   UpdateComboPayload,
 } from "../types";
 import { getProviderLogo } from "../utils/format";
-import { ModelCapabilityBadges } from "../components/ModelCapabilityBadges";
-import { getModelCapabilities, getModelChipClasses } from "../utils/modelCapabilities";
+import { ModelCapabilityBadges, ModelLimitBadge } from "../components/ModelCapabilityBadges";
+import {
+  getModelCapabilities,
+  getModelLimits,
+  getModelChipClasses,
+} from "../utils/modelCapabilities";
 
 const STRATEGY_META: Record<ComboStrategy, { label: string; desc: string }> = {
   fallback: {
@@ -498,11 +502,12 @@ export function CombosView({
                     const warning = validateChainEntry(parsed.baseModel, parsed.level);
                     const friendlyName = meta?.displayName || parsed.baseModel;
                     const caps = getModelCapabilities(parsed.baseModel);
+                    const limits = getModelLimits(parsed.baseModel);
                     const chipStyle = getModelChipClasses(caps);
                     return (
                       <div key={`${m}-${idx}`} className="flex items-center gap-2">
                         <div
-                          title={warning ? `${m} — ${warning}` : m}
+                          title={warning ? `${m} — ${warning}` : limits?.tooltip ? `${m} (${limits.tooltip})` : m}
                           className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors ${
                             warning
                               ? "border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[var(--warning-soft)]"
@@ -522,6 +527,7 @@ export function CombosView({
                             )}
                           </span>
                           <ModelCapabilityBadges caps={caps} compact />
+                          <ModelLimitBadge limits={limits} compact />
                           {warning && (
                             <span
                               className="inline-flex items-center gap-0.5 font-mono text-[10px] font-medium text-[var(--warning)]"
@@ -752,6 +758,7 @@ export function CombosView({
                     <Plus className="h-3 w-3 text-[var(--accent)]" />
                     <span className="font-mono">{meta.prefixedId}</span>
                     <ModelCapabilityBadges caps={getModelCapabilities(meta.prefixedId)} compact />
+                    <ModelLimitBadge limits={getModelLimits(meta.prefixedId)} compact />
                     {meta.supportedLevels.length > 0 && (
                       <span className="rounded bg-[var(--bg-elevated)] px-1 py-0.2 font-mono text-[9px] text-[var(--accent)]">
                         {meta.supportedLevels.length} lvls

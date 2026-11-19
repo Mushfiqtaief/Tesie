@@ -658,6 +658,12 @@ export interface ApplyCodexCliPayload {
   subagent_model?: string;
 }
 
+export interface ModelLimitInfo {
+  context?: number;
+  input?: number;
+  output?: number;
+}
+
 export interface OpenAiModelEntry {
   id: string;
   object: string;
@@ -670,6 +676,9 @@ export interface OpenAiModelEntry {
   reasoning?: boolean;
   tool_call?: boolean;
   modalities?: string[];
+  limit?: ModelLimitInfo;
+  context_length?: number;
+  max_output_tokens?: number;
 }
 
 export interface ApiKeyView {
