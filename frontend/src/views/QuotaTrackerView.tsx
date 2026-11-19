@@ -21,6 +21,7 @@ import { ProviderIcon } from "../components/ProviderIcon";
 import { ProbeSettingsBar } from "../components/ProbeSettingsBar";
 import { QuotaPageSkeleton } from "../components/Skeleton";
 import { ModelCapabilityBadges } from "../components/ModelCapabilityBadges";
+import { AntigravityPoolsGauges } from "../components/AntigravityPoolsGauges";
 import { getModelCapabilities, getModelChipClasses } from "../utils/modelCapabilities";
 import {
   Button,
@@ -32,7 +33,6 @@ import {
 } from "../components/UiPrimitives";
 import type {
   AntigravityAccountView,
-  AntigravityPoolWindow,
   IpQuotaWithProxies,
   ProviderCatalogItem,
   ProviderQuotaSummary,
@@ -96,30 +96,7 @@ function isAgAccountCooling(acct: AntigravityAccountView, nowMs: number): boolea
   );
 }
 
-function splitAgMainPools(acct: AntigravityAccountView): {
-  geminiWeekly?: AntigravityPoolWindow;
-  gemini5h?: AntigravityPoolWindow;
-  claudeWeekly?: AntigravityPoolWindow;
-  claude5h?: AntigravityPoolWindow;
-} {
-  const unlockedPools = (acct.quota?.pools ?? []).filter((p) => p.unlocked !== false);
-  const pick = (groupNeedles: string[], isWeekly: boolean) =>
-    unlockedPools.find((p) => {
-      const gn = `${p.group_name} ${p.key}`.toLowerCase();
-      const win = `${p.window_label} ${p.key}`.toLowerCase();
-      const groupMatch = groupNeedles.some((n) => gn.includes(n));
-      const winMatch = isWeekly
-        ? win.includes("week")
-        : win.includes("5h") || win.includes("session");
-      return groupMatch && winMatch;
-    });
-  return {
-    geminiWeekly: pick(["gemini"], true),
-    gemini5h: pick(["gemini"], false),
-    claudeWeekly: pick(["claude", "gpt"], true),
-    claude5h: pick(["claude", "gpt"], false),
-  };
-}
+
 
 export function QuotaTrackerView({
   providers = [],
@@ -814,7 +791,6 @@ export function QuotaTrackerView({
               const assigned = acct.partition?.assigned_proxies ?? [];
               const firstNode = assigned[0]?.name;
               const lastNode = assigned[assigned.length - 1]?.name;
-              const { geminiWeekly: gemWeekly, claudeWeekly } = splitAgMainPools(acct);
               const cooldownMap = new Map(
                 (acct.model_cooldowns ?? []).map((mc) => [mc.model, mc]),
               );
@@ -961,89 +937,12 @@ export function QuotaTrackerView({
                     </div>
                   </div>
 
-                  {/* Quota Weekly Pools (Compact, high-contrast visual gauges) */}
-                  {(gemWeekly || claudeWeekly) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 p-2.5">
-                      {gemWeekly && (() => {
-                        const rawGem = Math.round(gemWeekly.remaining_percentage);
-                        const gemPct = isBanned ? 0 : !acct.enabled ? 0 : rawGem;
-                        return (
-                          <div className="flex items-center justify-between gap-3 px-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-blue-400"}`} />
-                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Gemini Weekly Pool</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-300 ${
-                                    isBanned
-                                      ? "bg-rose-500/40"
-                                      : !acct.enabled
-                                        ? "bg-zinc-600"
-                                        : gemPct <= 20
-                                          ? "bg-rose-500"
-                                          : gemPct <= 50
-                                            ? "bg-amber-400"
-                                            : "bg-blue-400"
-                                  }`}
-                                  style={{ width: `${gemPct}%` }}
-                                />
-                              </div>
-                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
-                                {isBanned ? (
-                                  <span className="text-rose-400">0%</span>
-                                ) : !acct.enabled ? (
-                                  <span className="text-[var(--text-muted)]">0%</span>
-                                ) : (
-                                  `${gemPct}%`
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                      {claudeWeekly && (() => {
-                        const rawClaude = Math.round(claudeWeekly.remaining_percentage);
-                        const claudePct = isBanned ? 0 : !acct.enabled ? 0 : rawClaude;
-                        return (
-                          <div className="flex items-center justify-between gap-3 px-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`h-2 w-2 rounded-full shrink-0 ${isBanned ? "bg-rose-400" : !acct.enabled ? "bg-zinc-500" : "bg-purple-400"}`} />
-                              <span className="text-xs font-medium text-[var(--text-secondary)] truncate">Claude / GPT Pool</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-300 ${
-                                    isBanned
-                                      ? "bg-rose-500/40"
-                                      : !acct.enabled
-                                        ? "bg-zinc-600"
-                                        : claudePct <= 20
-                                          ? "bg-rose-500"
-                                          : claudePct <= 50
-                                            ? "bg-amber-400"
-                                            : "bg-purple-400"
-                                  }`}
-                                  style={{ width: `${claudePct}%` }}
-                                />
-                              </div>
-                              <span className="font-mono text-xs font-semibold text-[var(--text-primary)] tabular-nums">
-                                {isBanned ? (
-                                  <span className="text-rose-400">0%</span>
-                                ) : !acct.enabled ? (
-                                  <span className="text-[var(--text-muted)]">0%</span>
-                                ) : (
-                                  `${claudePct}%`
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
+                  {/* Quota Pools (Weekly Pool & 5h Rolling Limit) */}
+                  <AntigravityPoolsGauges
+                    acct={acct}
+                    isBanned={isBanned}
+                    nowMs={nowMs}
+                  />
 
                   {/* Models Section: Organized & Noise-free */}
                   {availableModels.length > 0 ? (
@@ -1096,15 +995,30 @@ export function QuotaTrackerView({
                                     ? "text-amber-400 font-semibold"
                                     : "text-emerald-400 font-medium";
 
+                          const is5hExhausted =
+                            !isInactive &&
+                            !modelCooling &&
+                            mq.session_remaining_percentage !== null &&
+                            mq.session_remaining_percentage !== undefined &&
+                            mq.session_remaining_percentage <= 0 &&
+                            (mq.weekly_remaining_percentage ?? 100) > 0;
+
+                          const modelTooltip = isInactive
+                            ? `${mq.display_name || mq.model} (${mq.model}) — ${isBanned ? "Account Banned" : "Account Disabled"}`
+                            : `${mq.display_name || mq.model} (${mq.model})
+• Effective Quota: ${pct}%
+• 5h Rolling Limit: ${mq.session_remaining_percentage != null ? `${Math.round(mq.session_remaining_percentage)}%` : "N/A"}${mq.session_reset_at && mq.session_reset_at > nowMs ? ` (resets in ${formatCountdown(mq.session_reset_at, nowMs)})` : ""}
+• Weekly Pool: ${mq.weekly_remaining_percentage != null ? `${Math.round(mq.weekly_remaining_percentage)}%` : "N/A"}${mq.weekly_reset_at && mq.weekly_reset_at > nowMs ? ` (resets in ${formatCountdown(mq.weekly_reset_at, nowMs)})` : ""}${modelCooling ? `\n• Cooldown: ${failCount} fail(s), active for ${formatCountdown(coolUntil, nowMs)}` : ""}`;
+
                           return (
                             <div
                               key={mq.model}
                               className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${chipClass}`}
+                              title={modelTooltip}
                             >
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span
                                   className={`truncate font-medium ${isInactive ? "text-[var(--text-muted)] line-through" : "text-[var(--text-primary)]"}`}
-                                  title={mq.display_name || mq.model}
                                 >
                                   {mq.display_name || mq.model}
                                 </span>
@@ -1116,9 +1030,21 @@ export function QuotaTrackerView({
                                     ({failCount}f · {formatCountdown(coolUntil, nowMs)})
                                   </span>
                                 )}
-                                <span className={pctColor}>
-                                  {isBanned ? "banned" : !acct.enabled ? "disabled" : `${pct}%`}
-                                </span>
+                                {is5hExhausted ? (
+                                  <span
+                                    className="text-rose-400 font-semibold flex items-center gap-1"
+                                    title={`5h rolling limit exhausted (Weekly has ${Math.round(mq.weekly_remaining_percentage ?? 100)}%)`}
+                                  >
+                                    <span>0%</span>
+                                    <span className="text-[10px] text-amber-400 font-normal">
+                                      ({mq.session_reset_at && mq.session_reset_at > nowMs ? formatCountdown(mq.session_reset_at, nowMs) : "5h limit"})
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span className={pctColor}>
+                                    {isBanned ? "banned" : !acct.enabled ? "disabled" : `${pct}%`}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           );
