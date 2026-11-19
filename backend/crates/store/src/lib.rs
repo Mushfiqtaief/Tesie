@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod bridge;
 pub mod combos;
 pub mod connections;
 pub mod custom_providers;
@@ -21,6 +22,7 @@ use sqlx::{Row, SqlitePool};
 use tesie_core::{Result, TesRouteError};
 
 use backup::BackupRepo;
+use bridge::BridgeRepo;
 use combos::CombosRepo;
 use connections::ConnectionsRepo;
 use custom_providers::CustomProvidersRepo;
@@ -649,6 +651,10 @@ impl Store {
 
     pub fn custom_providers(&self) -> CustomProvidersRepo {
         CustomProvidersRepo::new(self.pool.clone())
+    }
+
+    pub fn bridge(&self) -> BridgeRepo {
+        BridgeRepo::new(self.pool.clone())
     }
 
     pub fn backup(&self) -> BackupRepo {

@@ -414,3 +414,28 @@ impl Default for GatewaySettings {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultimodalBridgeConfig {
+    pub vision_enabled: bool,
+    pub vision_model: Option<String>,
+    pub vision_mode: String,
+    pub vision_prompt: Option<String>,
+    pub audio_enabled: bool,
+    pub audio_model: Option<String>,
+    pub audio_prompt: Option<String>,
+}
+
+impl Default for MultimodalBridgeConfig {
+    fn default() -> Self {
+        Self {
+            vision_enabled: false,
+            vision_model: None,
+            vision_mode: "standard".to_string(),
+            vision_prompt: None,
+            audio_enabled: false,
+            audio_model: None,
+            audio_prompt: None,
+        }
+    }
+}

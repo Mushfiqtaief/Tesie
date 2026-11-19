@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -12,7 +11,6 @@ import {
   AlertCircle,
   Copy,
   ExternalLink,
-  Eye,
   Gauge,
   Globe,
   KeyRound,
@@ -31,14 +29,16 @@ import {
   Sparkles,
   Trash2,
   UserCheck,
-  Volume2,
-  Layers,
   Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ProbeSettingsBar } from "../components/ProbeSettingsBar";
-import { ModelCapabilityBadges, ModelLimitBadge } from "../components/ModelCapabilityBadges";
+import {
+  ModelCapabilityBadges,
+  ModelCapabilityIcons,
+  ModelLimitBadge,
+} from "../components/ModelCapabilityBadges";
 import {
   getModelCapabilities,
   getModelLimits,
@@ -2152,50 +2152,6 @@ export function ProvidersModelsView({
         }
       >
         <div className="bg-[var(--bg-elevated)]/25 p-4 space-y-3">
-          {/* Visual Capability Legend */}
-          <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/75 px-3.5 py-2.5 text-xs text-[var(--text-secondary)]">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-semibold text-[var(--text-primary)]">Card Accents:</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-3 w-1 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.7)]" />
-                <Eye className="h-3.5 w-3.5 text-sky-400" />
-                <span className="text-sky-400 font-medium">Half Blue (Left)</span>
-                <span className="text-[var(--text-muted)]">= Vision</span>
-              </span>
-              <span className="text-[var(--border-subtle)]">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-3 w-1 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.7)]" />
-                <Brain className="h-3.5 w-3.5 text-amber-400" />
-                <span className="text-amber-400 font-medium">Half Orange (Right)</span>
-                <span className="text-[var(--text-muted)]">= Thinking</span>
-              </span>
-              <span className="text-[var(--border-subtle)]">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="flex items-center gap-0.5">
-                  <span className="h-3 w-1 rounded-l-full bg-sky-500" />
-                  <span className="h-3 w-1 rounded-r-full bg-amber-500" />
-                </span>
-                <span className="text-[var(--text-primary)] font-medium">Split Blue & Orange</span>
-                <span className="text-[var(--text-muted)]">= Dual Support</span>
-              </span>
-              <span className="text-[var(--border-subtle)]">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
-                <span className="text-emerald-400 font-medium">Green Badge</span>
-                <span className="text-[var(--text-muted)]">= Audio</span>
-              </span>
-              <span className="text-[var(--border-subtle)]">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-                <span className="text-[var(--text-secondary)] font-medium">Pill Badge</span>
-                <span className="text-[var(--text-muted)]">= Context & Output Limit</span>
-              </span>
-            </div>
-            <div className="font-mono text-[11px] text-[var(--text-muted)]">
-              Showing {filteredModels.length} of {providerModels.length} models
-            </div>
-          </div>
-
           <div
             className={`grid gap-2.5 ${
               modelsViewMode === "list"
@@ -2221,7 +2177,7 @@ export function ProvidersModelsView({
               return (
                 <div
                   key={fullSpec}
-                  className={`group relative overflow-hidden flex flex-col justify-between gap-2.5 rounded-xl px-3.5 py-3 transition-[border-color,background-color,box-shadow] duration-200 ${cardAccents} ${
+                  className={`group relative overflow-hidden flex flex-col justify-between gap-3 rounded-xl px-3.5 py-3 transition-[border-color,background-color,box-shadow] duration-200 ${cardAccents} ${
                     isLockedForUser
                       ? "opacity-45 grayscale"
                       : ""
@@ -2234,24 +2190,28 @@ export function ProvidersModelsView({
                       : fullSpec
                   }
                 >
-                  <div className="min-w-0 space-y-1.5">
-                    <div className="truncate font-mono text-[13px]" title={fullSpec}>
-                      {prefix && <span className="text-[var(--text-muted)]">{prefix}</span>}
-                      <span className="font-medium text-[var(--text-primary)]">{modelSlug}</span>
+                  <div className="min-w-0 space-y-2">
+                    {/* Header Row: Model spec on left, capability icons in top-right corner */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 truncate font-mono text-[13px]" title={fullSpec}>
+                        {prefix && <span className="text-[var(--text-muted)]">{prefix}</span>}
+                        <span className="font-semibold text-[var(--text-primary)]">{modelSlug}</span>
+                      </div>
+                      <ModelCapabilityIcons caps={caps} />
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <ModelCapabilityBadges caps={caps} />
+                    {/* Second Row: Token Limit Badge & Quota / Lock Status */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
                       <ModelLimitBadge limits={limits} />
                       {(isLockedForUser || agState) && (
-                        <div className="text-[11px]">
+                        <div className="text-[11px] shrink-0">
                           {isLockedForUser ? (
                             <span className="inline-flex items-center gap-1 text-[var(--text-muted)]">
                               <Lock className="h-3 w-3" />
                               Not unlocked
                             </span>
                           ) : agState ? (
-                            <span className="font-mono text-[var(--success)] tabular-nums">
+                            <span className="font-mono text-[var(--success)] font-medium tabular-nums">
                               {Math.round(agState.maxRemaining)}% left
                             </span>
                           ) : null}

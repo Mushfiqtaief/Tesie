@@ -1,4 +1,5 @@
 pub mod aggregator;
+pub mod bridge;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use tesie_store::Store;
 use uuid::Uuid;
 
 use aggregator::{drain_and_aggregate, sse_error_payload};
+use bridge::bridge_request_if_needed;
 
 static COMBO_RR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -206,6 +208,24 @@ async fn handle_gateway_request(
         .unwrap_or_default();
     let ts_report =
         apply_token_saver_to_request(&mut body, source_format, &header_pairs, &ts_cfg);
+
+    // Multimodal Bridge: Transcribe images/audio if target model lacks native capability
+    let bridge_cfg = state
+        .store
+        .bridge()
+        .get_config()
+        .await
+        .unwrap_or_default();
+    let _ = bridge_request_if_needed(
+        &state.engine,
+        &mut body,
+        source_format,
+        &raw_model,
+        &header_pairs,
+        &api_key_id,
+        &bridge_cfg,
+    )
+    .await;
 
     // Check if the requested model matches a Combo (`<name>` or `combo/<name>`)
     let combo_lookup = raw_model.strip_prefix("combo/").unwrap_or(&raw_model);

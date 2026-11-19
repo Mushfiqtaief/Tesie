@@ -158,6 +158,12 @@ pub fn admin_router(state: AdminState) -> Router {
             "/token-saver/stats",
             axum::routing::delete(clear_token_saver_stats),
         )
+        .route(
+            "/bridge",
+            get(get_bridge_config)
+                .put(update_bridge_config)
+                .patch(update_bridge_config),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_admin_auth))
         .with_state(state)
 }
@@ -2710,6 +2716,54 @@ async fn clear_token_saver_stats(
         .await
         .map_err(err_resp)?;
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateBridgeInput {
+    pub vision_enabled: Option<bool>,
+    pub vision_model: Option<Option<String>>,
+    pub vision_mode: Option<String>,
+    pub vision_prompt: Option<Option<String>>,
+    pub audio_enabled: Option<bool>,
+    pub audio_model: Option<Option<String>>,
+    pub audio_prompt: Option<Option<String>>,
+}
+
+async fn get_bridge_config(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let config = state.store.bridge().get_config().await.map_err(err_resp)?;
+    Ok(Json(json!({ "config": config })))
+}
+
+async fn update_bridge_config(
+    State(state): State<AdminState>,
+    Json(input): Json<UpdateBridgeInput>,
+) -> std::result::Result<Json<Value>, Response> {
+    let mut cfg = state.store.bridge().get_config().await.map_err(err_resp)?;
+    if let Some(v) = input.vision_enabled {
+        cfg.vision_enabled = v;
+    }
+    if let Some(v) = input.vision_model {
+        cfg.vision_model = v;
+    }
+    if let Some(v) = input.vision_mode {
+        cfg.vision_mode = v;
+    }
+    if let Some(v) = input.vision_prompt {
+        cfg.vision_prompt = v;
+    }
+    if let Some(v) = input.audio_enabled {
+        cfg.audio_enabled = v;
+    }
+    if let Some(v) = input.audio_model {
+        cfg.audio_model = v;
+    }
+    if let Some(v) = input.audio_prompt {
+        cfg.audio_prompt = v;
+    }
+    state.store.bridge().save_config(&cfg).await.map_err(err_resp)?;
+    Ok(Json(json!({ "config": cfg })))
 }
 
 fn err_resp(err: TesRouteError) -> Response {

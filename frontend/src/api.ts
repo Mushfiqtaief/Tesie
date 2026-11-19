@@ -21,6 +21,7 @@ import type {
   IpQuotaWithProxies,
   LogQueryParams,
   MihomoProxyState,
+  MultimodalBridgeConfig,
   OAuthSessionPollStatus,
   OpenAiModelEntry,
   OpenCodeCliStatus,
@@ -41,6 +42,7 @@ import type {
   TokenSaverTestResponse,
   TopologyResponse,
   UpdateApiKeyPayload,
+  UpdateBridgePayload,
   UpdateComboPayload,
   UpdateCustomProviderPayload,
   UpdateIpQuotaLimitsPayload,
@@ -593,6 +595,20 @@ export const api = {
   clearTokenSaverStats: async (): Promise<{ deleted: number }> => {
     return requestJson<{ deleted: number }>("/api/admin/token-saver/stats", {
       method: "DELETE",
+    });
+  },
+
+  getBridgeConfig: async (): Promise<{ config: MultimodalBridgeConfig }> => {
+    return requestJson<{ config: MultimodalBridgeConfig }>("/api/admin/bridge");
+  },
+
+  updateBridgeConfig: async (
+    payload: UpdateBridgePayload,
+  ): Promise<{ config: MultimodalBridgeConfig }> => {
+    return requestJson<{ config: MultimodalBridgeConfig }>("/api/admin/bridge", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
   },
 

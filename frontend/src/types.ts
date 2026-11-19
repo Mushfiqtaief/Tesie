@@ -891,3 +891,23 @@ export interface TokenSaverTestResponse {
   };
   style_prompt_preview: string | null;
 }
+
+export interface MultimodalBridgeConfig {
+  vision_enabled: boolean;
+  vision_model: string | null;
+  vision_mode: "standard" | "code_ocr" | "minimal";
+  vision_prompt: string | null;
+  audio_enabled: boolean;
+  audio_model: string | null;
+  audio_prompt: string | null;
+}
+
+export interface UpdateBridgePayload {
+  vision_enabled?: boolean;
+  vision_model?: string | null;
+  vision_mode?: string;
+  vision_prompt?: string | null;
+  audio_enabled?: boolean;
+  audio_model?: string | null;
+  audio_prompt?: string | null;
+}

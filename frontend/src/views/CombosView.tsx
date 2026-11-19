@@ -6,6 +6,8 @@ import {
   ArrowUp,
   Check,
   Copy,
+  Eye,
+  Brain,
   Layers,
   Pencil,
   Play,
@@ -33,7 +35,11 @@ import type {
   UpdateComboPayload,
 } from "../types";
 import { getProviderLogo } from "../utils/format";
-import { ModelCapabilityBadges, ModelLimitBadge } from "../components/ModelCapabilityBadges";
+import {
+  ModelCapabilityBadges,
+  ModelCapabilityIcons,
+  ModelLimitBadge,
+} from "../components/ModelCapabilityBadges";
 import {
   getModelCapabilities,
   getModelLimits,
@@ -132,6 +138,9 @@ export function CombosView({
   const [strategy, setStrategy] = useState<ComboStrategy>("fallback");
   const [chain, setChain] = useState<ChainDraftItem[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerCategory, setPickerCategory] = useState<
+    "all" | "vision" | "thinking" | "antigravity" | "opencode"
+  >("all");
   const [customModelInput, setCustomModelInput] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -206,6 +215,7 @@ export function CombosView({
     setStrategy("fallback");
     setChain(availableModels.slice(0, 2).map((m) => makeDraftItem(m)));
     setPickerSearch("");
+    setPickerCategory("all");
     setCustomModelInput("");
     setModalOpen(true);
   }
@@ -225,6 +235,7 @@ export function CombosView({
       }),
     );
     setPickerSearch("");
+    setPickerCategory("all");
     setCustomModelInput("");
     setModalOpen(true);
   }
@@ -358,6 +369,17 @@ export function CombosView({
       meta.supportedLevels.length === 0 &&
       chain.some((item) => item.baseModel === meta.prefixedId);
     if (alreadySingleAdded) return false;
+
+    if (pickerCategory === "vision") {
+      if (!getModelCapabilities(meta.prefixedId).hasVision) return false;
+    } else if (pickerCategory === "thinking") {
+      if (!getModelCapabilities(meta.prefixedId).hasThinking) return false;
+    } else if (pickerCategory === "antigravity") {
+      if (!meta.prefixedId.startsWith("ag/") && !meta.prefixedId.startsWith("antigravity/")) return false;
+    } else if (pickerCategory === "opencode") {
+      if (!meta.prefixedId.startsWith("oc/") && !meta.prefixedId.startsWith("opencode/")) return false;
+    }
+
     const pq = pickerSearch.trim().toLowerCase();
     if (!pq) return true;
     return (
@@ -554,62 +576,94 @@ export function CombosView({
       {/* Create / Edit Combo Modal */}
       <Modal
         open={modalOpen}
-        title={editing ? `Edit combo: ${editing.name}` : "Create model combo"}
+        title={editing ? `Edit Combo: ${editing.name}` : "Create Model Combo"}
         onClose={() => setModalOpen(false)}
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-3xl"
       >
         <form onSubmit={handleSave} className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                Combo model ID
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. smart-free, fast-coding"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className={`${INPUT_CLASS} font-mono`}
-              />
-              <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-                Letters, numbers, hyphens, underscores, or dots
-              </p>
-            </div>
+          {/* Section 1: Identification & Strategy */}
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 p-3.5 space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Combo Model ID
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. smart-free, fast-coding"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className={`${INPUT_CLASS} font-mono text-sm`}
+                />
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Exposed to clients as{" "}
+                  <code className="rounded bg-[var(--bg-surface)] px-1 py-0.2 font-mono text-[var(--accent)] font-semibold">
+                    {name.trim() || "<id>"}
+                  </code>
+                </p>
+              </div>
 
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                Routing strategy
-              </label>
-              <select
-                value={strategy}
-                onChange={(e) => setStrategy(e.target.value as ComboStrategy)}
-                className={INPUT_CLASS}
-              >
-                <option value="fallback">Fallback — try in order</option>
-                <option value="round-robin">Round Robin — rotate evenly</option>
-                <option value="random">Random — distribute load</option>
-              </select>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Routing Strategy
+                </label>
+                <select
+                  value={strategy}
+                  onChange={(e) => setStrategy(e.target.value as ComboStrategy)}
+                  className={`${INPUT_CLASS} text-sm`}
+                >
+                  <option value="fallback">Fallback — Try models in sequence on 429/error</option>
+                  <option value="round-robin">Round Robin — Rotate requests evenly</option>
+                  <option value="random">Random — Distribute load across models</option>
+                </select>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  {strategy === "fallback"
+                    ? "Tries model #1 first; automatically falls over to #2 on 429 quota or failure."
+                    : strategy === "round-robin"
+                    ? "Rotates requests evenly in round-robin fashion across all chain targets."
+                    : "Randomly dispatches requests to balance load across configured models."}
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Ordered Chain */}
+          {/* Section 2: Active Pipeline */}
           <div className="space-y-2">
-            <label className="block text-xs font-medium text-[var(--text-secondary)]">
-              Ordered target models ({chain.length})
-            </label>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+                  Target Models Pipeline
+                </span>
+                <span className="rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--accent)] border border-[var(--border-subtle)]">
+                  {chain.length} {chain.length === 1 ? "model" : "models"}
+                </span>
+              </div>
+              {chain.length > 1 && (
+                <span className="text-[11px] text-[var(--text-muted)]">
+                  {strategy === "fallback" ? "Dispatches in top-to-bottom sequence" : "Rotation list"}
+                </span>
+              )}
+            </div>
+
             {chain.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-elevated)] p-3 text-center text-xs text-[var(--text-muted)]">
-                Click models below to add them to this combo chain
+              <div className="rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-elevated)]/30 p-6 text-center space-y-1">
+                <Layers className="mx-auto h-6 w-6 text-[var(--text-muted)]" />
+                <p className="text-xs font-medium text-[var(--text-primary)]">Your combo chain is empty</p>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  Click any model from the catalog below to add it to your pipeline.
+                </p>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                 {chain.map((item, idx) => {
                   const meta = catalogEntries.map.get(item.baseModel);
                   const supportedLevels = meta?.supportedLevels ?? [];
                   const hasMultipleLevels = supportedLevels.length > 0;
                   const warning = validateChainEntry(item.baseModel, item.level);
                   const wireSpec = formatComboModelSpec(item.baseModel, item.level);
+                  const caps = getModelCapabilities(item.baseModel);
+                  const limits = getModelLimits(item.baseModel);
                   const levelUnsupported =
                     !!item.level &&
                     ((hasMultipleLevels && !supportedLevels.includes(item.level)) ||
@@ -618,15 +672,15 @@ export function CombosView({
                   return (
                     <div
                       key={item.uid}
-                      className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
+                      className={`flex flex-wrap items-center justify-between gap-2.5 rounded-xl border px-3 py-2 transition-colors ${
                         warning
                           ? "border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[var(--warning-soft)]"
-                          : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]"
+                          : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
                       }`}
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <span className="w-4 font-mono text-[11px] text-[var(--text-muted)]">
-                          {idx + 1}.
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--bg-elevated)] font-mono text-[10px] font-bold text-[var(--accent)] border border-[var(--border-subtle)]">
+                          {idx + 1}
                         </span>
                         <ProviderIcon
                           src={getProviderLogo(item.baseModel)}
@@ -635,10 +689,14 @@ export function CombosView({
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="truncate text-xs font-medium text-[var(--text-primary)]">
+                            <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
                               {meta?.displayName || item.baseModel}
-                              {item.level ? ` (${item.level})` : ""}
                             </span>
+                            {item.level && (
+                              <span className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.2 font-mono text-[10px] font-semibold text-[var(--accent)] border border-[var(--border-subtle)]">
+                                {item.level}
+                              </span>
+                            )}
                             {warning && (
                               <span
                                 className="inline-flex items-center gap-1 rounded bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--warning)]"
@@ -649,20 +707,24 @@ export function CombosView({
                               </span>
                             )}
                           </div>
-                          <div className="truncate font-mono text-[10px] text-[var(--text-muted)]">
-                            {wireSpec}
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <span className="truncate font-mono text-[10px] text-[var(--text-muted)]">
+                              {wireSpec}
+                            </span>
+                            <ModelLimitBadge limits={limits} compact />
                           </div>
                         </div>
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1.5">
-                        {/* Show level selector ONLY when the model has multiple supported levels */}
+                        <ModelCapabilityIcons caps={caps} />
+
                         {hasMultipleLevels && (
                           <select
-                            aria-label={`Thinking or power level for ${meta?.displayName || item.baseModel}`}
+                            aria-label={`Level for ${meta?.displayName || item.baseModel}`}
                             value={item.level ?? meta?.defaultLevel ?? supportedLevels[0]}
                             onChange={(e) => updateChainItemLevel(item.uid, e.target.value)}
-                            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-[11px] text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-1 font-mono text-[11px] text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
                           >
                             {levelUnsupported && item.level && (
                               <option value={item.level}>
@@ -676,44 +738,37 @@ export function CombosView({
                             ))}
                           </select>
                         )}
-                        {!hasMultipleLevels && item.level && (
+
+                        <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-[var(--border-subtle)]">
                           <button
                             type="button"
-                            onClick={() => updateChainItemLevel(item.uid, null)}
-                            className="rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--warning)] hover:text-[var(--text-primary)]"
-                            title="Clear unsupported level suffix"
+                            disabled={idx === 0}
+                            onClick={() => moveInChain(idx, -1)}
+                            className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] disabled:opacity-25"
+                            title="Move up"
                           >
-                            Clear ({item.level})
+                            <ArrowUp className="h-3.5 w-3.5" />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={idx === 0}
-                          onClick={() => moveInChain(idx, -1)}
-                          className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] disabled:opacity-30"
-                          title="Move up"
-                        >
-                          <ArrowUp className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={idx === chain.length - 1}
-                          onClick={() => moveInChain(idx, 1)}
-                          className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] disabled:opacity-30"
-                          title="Move down"
-                        >
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setChain((prev) => prev.filter((x) => x.uid !== item.uid))
-                          }
-                          className="rounded p-1 text-[var(--danger)] hover:bg-[var(--danger-soft)]"
-                          title="Remove model"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                          <button
+                            type="button"
+                            disabled={idx === chain.length - 1}
+                            onClick={() => moveInChain(idx, 1)}
+                            className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] disabled:opacity-25"
+                            title="Move down"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setChain((prev) => prev.filter((x) => x.uid !== item.uid))
+                            }
+                            className="rounded p-1 text-[var(--danger)] hover:bg-[var(--danger-soft)]"
+                            title="Remove model"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -722,57 +777,133 @@ export function CombosView({
             )}
           </div>
 
-          {/* Add From Catalog or Custom */}
-          <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-[var(--text-secondary)]">
-                Add models from catalog
+          {/* Section 3: Add From Catalog */}
+          <div className="space-y-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+                Add Models From Catalog
               </span>
-              <input
-                type="text"
-                placeholder="Filter catalog..."
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                className={`${INPUT_CLASS} max-w-[200px] py-1`}
-              />
+              <div className="relative w-48">
+                <Search className="pointer-events-none absolute top-2 left-2.5 h-3.5 w-3.5 text-[var(--text-muted)]" />
+                <input
+                  type="text"
+                  placeholder="Search catalog..."
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  className={`${INPUT_CLASS} pl-8 py-1 text-xs`}
+                />
+              </div>
             </div>
 
-            <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2.5">
+            {/* Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPickerCategory("all")}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  pickerCategory === "all"
+                    ? "bg-[var(--accent)] text-white shadow-2xs"
+                    : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
+                }`}
+              >
+                All Models
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerCategory("vision")}
+                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  pickerCategory === "vision"
+                    ? "bg-sky-500 text-white shadow-2xs"
+                    : "bg-[var(--bg-surface)] text-sky-400 hover:bg-sky-500/10 border border-sky-500/30"
+                }`}
+              >
+                <Eye className="h-3 w-3" />
+                Vision
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerCategory("thinking")}
+                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  pickerCategory === "thinking"
+                    ? "bg-amber-500 text-white shadow-2xs"
+                    : "bg-[var(--bg-surface)] text-amber-400 hover:bg-amber-500/10 border border-amber-500/30"
+                }`}
+              >
+                <Brain className="h-3 w-3" />
+                Thinking
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerCategory("antigravity")}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  pickerCategory === "antigravity"
+                    ? "bg-[var(--accent)] text-white shadow-2xs"
+                    : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
+                }`}
+              >
+                Antigravity
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerCategory("opencode")}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  pickerCategory === "opencode"
+                    ? "bg-[var(--accent)] text-white shadow-2xs"
+                    : "bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)]"
+                }`}
+              >
+                OpenCode Free
+              </button>
+            </div>
+
+            {/* Catalog Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
               {pickerFiltered.length === 0 ? (
-                <span className="p-1 text-xs text-[var(--text-muted)]">
-                  No matching catalog models available.
-                </span>
+                <div className="col-span-2 py-4 text-center text-xs text-[var(--text-muted)]">
+                  No matching catalog models found.
+                </div>
               ) : (
-                pickerFiltered.map((meta) => (
-                  <button
-                    key={meta.prefixedId}
-                    type="button"
-                    onClick={() => addModelToChain(meta.prefixedId)}
-                    title={
-                      meta.supportedLevels.length > 0
-                        ? `Supports levels: ${meta.supportedLevels.join(", ")} (click to add another tier)`
-                        : meta.prefixedId
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)]"
-                  >
-                    <Plus className="h-3 w-3 text-[var(--accent)]" />
-                    <span className="font-mono">{meta.prefixedId}</span>
-                    <ModelCapabilityBadges caps={getModelCapabilities(meta.prefixedId)} compact />
-                    <ModelLimitBadge limits={getModelLimits(meta.prefixedId)} compact />
-                    {meta.supportedLevels.length > 0 && (
-                      <span className="rounded bg-[var(--bg-elevated)] px-1 py-0.2 font-mono text-[9px] text-[var(--accent)]">
-                        {meta.supportedLevels.length} lvls
-                      </span>
-                    )}
-                  </button>
-                ))
+                pickerFiltered.map((meta) => {
+                  const caps = getModelCapabilities(meta.prefixedId);
+                  const limits = getModelLimits(meta.prefixedId);
+                  return (
+                    <button
+                      key={meta.prefixedId}
+                      type="button"
+                      onClick={() => addModelToChain(meta.prefixedId)}
+                      className="group flex items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2.5 text-left transition-[border-color,background-color] hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]/60 cursor-pointer shadow-2xs"
+                      title={`Click to add ${meta.prefixedId}`}
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <ProviderIcon src={getProviderLogo(meta.prefixedId)} name={meta.prefixedId} size={20} />
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-semibold text-[var(--text-primary)]">
+                            {meta.displayName}
+                          </div>
+                          <div className="truncate font-mono text-[10px] text-[var(--text-muted)]">
+                            {meta.prefixedId}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <ModelCapabilityIcons caps={caps} />
+                        <ModelLimitBadge limits={limits} compact />
+                        <span className="rounded-md bg-[var(--bg-elevated)] p-1 text-[var(--accent)] group-hover:bg-[var(--accent)] group-hover:text-white transition-colors">
+                          <Plus className="h-3.5 w-3.5" />
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
 
-            <div className="flex gap-2">
+            {/* Custom Model Input */}
+            <div className="flex gap-2 pt-1 border-t border-[var(--border-subtle)]/50">
               <input
                 type="text"
-                placeholder="Or add custom model spec (e.g. ocz/claude-sonnet-4)..."
+                placeholder="Or enter custom model ID (e.g. ocz/claude-sonnet-4)..."
                 value={customModelInput}
                 onChange={(e) => setCustomModelInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -782,21 +913,23 @@ export function CombosView({
                     setCustomModelInput("");
                   }
                 }}
-                className={`${INPUT_CLASS} flex-1 font-mono`}
+                className={`${INPUT_CLASS} flex-1 font-mono text-xs`}
               />
               <Button
                 variant="secondary"
+                size="sm"
                 onClick={() => {
                   addModelToChain(customModelInput);
                   setCustomModelInput("");
                 }}
               >
-                Add
+                <Plus className="h-3.5 w-3.5" />
+                Add Custom
               </Button>
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-2 border-t border-[var(--border-subtle)]">
             <Button variant="secondary" size="md" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>

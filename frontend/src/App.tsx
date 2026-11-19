@@ -17,6 +17,7 @@ import {
   Scissors,
   ScrollText,
   Settings,
+  Sparkles,
   Sun,
   Terminal,
   Wrench,
@@ -69,6 +70,7 @@ import { ProxyPoolView } from "./views/ProxyPoolView";
 import { QuotaTrackerView } from "./views/QuotaTrackerView";
 import { SettingsView } from "./views/SettingsView";
 import { TokenSaverView } from "./views/TokenSaverView";
+import { MultimodalBridgeView } from "./views/MultimodalBridgeView";
 
 type RoutePath =
   | "/"
@@ -76,6 +78,7 @@ type RoutePath =
   | "/providers"
   | "/combos"
   | "/token-saver"
+  | "/bridge"
   | "/quotas"
   | "/proxies"
   | "/cli-tools"
@@ -137,6 +140,12 @@ const NAV_GROUPS: NavGroup[] = [
         icon: Scissors,
       },
       {
+        path: "/bridge",
+        label: "Multimodal Bridge",
+        subtitle: "Vision & audio adapters for text-only models",
+        icon: Sparkles,
+      },
+      {
         path: "/quotas",
         label: "Quota Tracker",
         subtitle: "Live per-IP & per-account capacity",
@@ -193,6 +202,7 @@ function normalizeRoutePath(pathname: string): RoutePath {
     "/providers",
     "/combos",
     "/token-saver",
+    "/bridge",
     "/quotas",
     "/proxies",
     "/cli-tools",
@@ -1310,6 +1320,10 @@ export function App() {
 
             {route === "/token-saver" && (
               <TokenSaverView nowMs={nowMs} onNotify={notify} />
+            )}
+
+            {route === "/bridge" && (
+              <MultimodalBridgeView onNotify={notify} />
             )}
 
             {route === "/quotas" && (
