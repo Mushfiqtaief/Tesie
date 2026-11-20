@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useDeferredValue, useMemo, useState } from "react";
 import {
   CheckSquare,
   Globe,
@@ -16,7 +16,7 @@ export interface ProxySelectionValue {
   selectedProxyIds: string[];
 }
 
-export function ProviderProxySelector({
+export const ProviderProxySelector = memo(function ProviderProxySelector({
   proxies,
   value,
   onChange,
@@ -30,22 +30,25 @@ export function ProviderProxySelector({
   onOpenProxyPool: () => void;
 }) {
   const [filterText, setFilterText] = useState("");
+  const deferredFilterText = useDeferredValue(filterText);
   const [layoutMode, setLayoutMode] = useState<"table" | "list">("table");
+  const [visibleLimit, setVisibleLimit] = useState(60);
 
   const externalProxies = useMemo(
     () => proxies.filter((p) => !p.is_direct),
     [proxies],
   );
   const allIds = useMemo(() => externalProxies.map((p) => p.id), [externalProxies]);
+  const allIdSet = useMemo(() => new Set<string>(allIds), [allIds]);
 
   const selectedSet = useMemo(() => {
     if (value.proxyMode === "direct") return new Set<string>();
     if (value.proxyMode === "all") return new Set<string>(allIds);
-    return new Set<string>(value.selectedProxyIds.filter((id) => allIds.includes(id)));
-  }, [value.proxyMode, value.selectedProxyIds, allIds]);
+    return new Set<string>(value.selectedProxyIds.filter((id) => allIdSet.has(id)));
+  }, [value.proxyMode, value.selectedProxyIds, allIds, allIdSet]);
 
   const filteredProxies = useMemo(() => {
-    const q = filterText.trim().toLowerCase();
+    const q = deferredFilterText.trim().toLowerCase();
     if (!q) return externalProxies;
     return externalProxies.filter(
       (p) =>
@@ -54,7 +57,12 @@ export function ProviderProxySelector({
         (p.host || "").toLowerCase().includes(q) ||
         p.proxy_type.toLowerCase().includes(q),
     );
-  }, [externalProxies, filterText]);
+  }, [externalProxies, deferredFilterText]);
+
+  const visibleProxies = useMemo(
+    () => filteredProxies.slice(0, visibleLimit),
+    [filteredProxies, visibleLimit],
+  );
 
   function applySelectedSet(nextSet: Set<string>, preferAllToken = false) {
     if (nextSet.size === 0) {
@@ -116,10 +124,14 @@ export function ProviderProxySelector({
   const isAllSelected =
     externalProxies.length > 0 &&
     (value.proxyMode === "all" || selectedCount === externalProxies.length);
-  const filteredSelectedCount = filteredProxies.filter((p) => selectedSet.has(p.id)).length;
-  const healthySelected = externalProxies.filter(
-    (p) => selectedSet.has(p.id) && p.alive,
-  ).length;
+  const filteredSelectedCount = useMemo(
+    () => filteredProxies.reduce((acc, p) => acc + (selectedSet.has(p.id) ? 1 : 0), 0),
+    [filteredProxies, selectedSet],
+  );
+  const healthySelected = useMemo(
+    () => externalProxies.reduce((acc, p) => acc + (selectedSet.has(p.id) && p.alive ? 1 : 0), 0),
+    [externalProxies, selectedSet],
+  );
 
   return (
     <div className="space-y-3">
@@ -201,7 +213,10 @@ export function ProviderProxySelector({
                 type="text"
                 placeholder="Filter NODE, IP, or type…"
                 value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
+                onChange={(e) => {
+                  setFilterText(e.target.value);
+                  setVisibleLimit(60);
+                }}
                 className={`${INPUT_CLASS} py-1.5 pl-8.5 text-[13px]`}
               />
             </div>
@@ -270,67 +285,94 @@ export function ProviderProxySelector({
                 No proxies match &ldquo;{filterText}&rdquo;
               </div>
             ) : (
-              <div
-                className={
-                  layoutMode === "list"
-                    ? "grid grid-cols-1 gap-2.5 md:grid-cols-2"
-                    : "grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4"
-                }
-              >
-                {filteredProxies.map((px) => {
-                  const checked = selectedSet.has(px.id);
-                  return (
-                    <label
-                      key={px.id}
-                      className={`flex cursor-pointer items-center justify-between gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] transition-[border-color,background-color] duration-150 select-none ${
-                        checked
-                          ? "border-[color-mix(in_srgb,var(--accent)_45%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--accent-soft)_38%,var(--bg-surface))] shadow-2xs"
-                          : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]/45"
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleOne(px.id)}
-                          className="h-4 w-4 shrink-0 rounded accent-[var(--accent)]"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`h-2 w-2 shrink-0 rounded-full ${
-                                px.alive ? "bg-[var(--success)]" : "bg-[var(--danger)]"
-                              }`}
-                            />
-                            <span className="truncate font-mono text-[13px] font-medium text-[var(--text-primary)]">
-                              {px.name}
-                            </span>
-                          </div>
-                          <div className="truncate font-mono text-[11px] text-[var(--text-muted)]">
-                            {px.ip || px.host || "unprobed"} · {px.proxy_type.toUpperCase()}
-                          </div>
-                        </div>
-                      </div>
-
-                      <span
-                        className={`shrink-0 font-mono text-[11px] tabular-nums ${
-                          !px.alive
-                            ? "text-[var(--danger)]"
-                            : px.latency_ms
-                              ? "text-[var(--success)]"
-                              : "text-[var(--text-muted)]"
+              <>
+                <div
+                  className={
+                    layoutMode === "list"
+                      ? "grid grid-cols-1 gap-2.5 md:grid-cols-2"
+                      : "grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4"
+                  }
+                >
+                  {visibleProxies.map((px) => {
+                    const checked = selectedSet.has(px.id);
+                    return (
+                      <label
+                        key={px.id}
+                        className={`cv-card flex cursor-pointer items-center justify-between gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] transition-[border-color,background-color] duration-150 select-none ${
+                          checked
+                            ? "border-[color-mix(in_srgb,var(--accent)_45%,var(--border-subtle))] bg-[color-mix(in_srgb,var(--accent-soft)_38%,var(--bg-surface))] shadow-2xs"
+                            : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]/45"
                         }`}
                       >
-                        {!px.alive ? "timeout" : px.latency_ms ? `${px.latency_ms}ms` : "—"}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleOne(px.id)}
+                            className="h-4 w-4 shrink-0 rounded accent-[var(--accent)]"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`h-2 w-2 shrink-0 rounded-full ${
+                                  px.alive ? "bg-[var(--success)]" : "bg-[var(--danger)]"
+                                }`}
+                              />
+                              <span className="truncate font-mono text-[13px] font-medium text-[var(--text-primary)]">
+                                {px.name}
+                              </span>
+                            </div>
+                            <div className="truncate font-mono text-[11px] text-[var(--text-muted)]">
+                              {px.ip || px.host || "unprobed"} · {px.proxy_type.toUpperCase()}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`shrink-0 font-mono text-[11px] tabular-nums ${
+                            !px.alive
+                              ? "text-[var(--danger)]"
+                              : px.latency_ms
+                                ? "text-[var(--success)]"
+                                : "text-[var(--text-muted)]"
+                          }`}
+                        >
+                          {!px.alive ? "timeout" : px.latency_ms ? `${px.latency_ms}ms` : "—"}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {filteredProxies.length > visibleProxies.length && (
+                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-muted)]">
+                    <span className="tabular-nums">
+                      Showing {visibleProxies.length} of {filteredProxies.length} proxies
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setVisibleLimit((v) => v + 60)}
+                      >
+                        Show +60 more
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setVisibleLimit(filteredProxies.length)}
+                      >
+                        Show all ({filteredProxies.length})
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
       )}
     </div>
   );
-}
+});

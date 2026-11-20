@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRightLeft,
   Check,
@@ -27,7 +27,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-export function SettingsView({
+export const SettingsView = memo(function SettingsView({
   onNotify,
   onReloadAll,
   onAutostartChanged,
@@ -514,7 +514,7 @@ export function SettingsView({
                   type="button"
                   disabled={togglingFailover}
                   onClick={() => void handleToggleFailover(true)}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                     data?.settings.exhaustive_failover
                       ? "bg-[var(--accent)] text-white shadow-xs"
                       : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
@@ -527,7 +527,7 @@ export function SettingsView({
                   type="button"
                   disabled={togglingFailover}
                   onClick={() => void handleToggleFailover(false)}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                     !data?.settings.exhaustive_failover
                       ? "bg-[var(--warning)] text-black font-semibold shadow-xs"
                       : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
@@ -701,4 +701,4 @@ export function SettingsView({
       </div>
     </div>
   );
-}
+});

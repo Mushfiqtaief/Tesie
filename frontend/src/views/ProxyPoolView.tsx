@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   Activity,
   AlertTriangle,
@@ -78,12 +79,27 @@ function LatencyCell({
   );
 }
 
-export function ProxyPoolView({
+const AutoTestCountdown = memo(function AutoTestCountdown({
+  lastAutoTestAt,
+  testIntervalSec,
+}: {
+  lastAutoTestAt: number | null;
+  testIntervalSec: number;
+}) {
+  const nowMs = useLiveClock(1000, lastAutoTestAt !== null && testIntervalSec > 0);
+  const nextAutoTestInSec =
+    lastAutoTestAt !== null
+      ? Math.max(0, Math.ceil((lastAutoTestAt + testIntervalSec * 1000 - nowMs) / 1000))
+      : null;
+  return <>{nextAutoTestInSec !== null ? ` (${nextAutoTestInSec}s)` : ""}</>;
+});
+
+export const ProxyPoolView = memo(function ProxyPoolView({
   proxies,
   testIntervalSec,
   lastAutoTestAt,
   loading,
-  nowMs,
+  nowMs: nowMsProp,
   testingAll,
   onCreateProxy,
   onUpdateProxy,
@@ -100,7 +116,7 @@ export function ProxyPoolView({
   testIntervalSec: number;
   lastAutoTestAt: number | null;
   loading: boolean;
-  nowMs: number;
+  nowMs?: number;
   testingAll: boolean;
   onCreateProxy: (payload: CreateProxyPayload) => Promise<void>;
   onUpdateProxy: (id: string, payload: UpdateProxyPayload) => Promise<void>;
@@ -113,6 +129,9 @@ export function ProxyPoolView({
   onUpdateTestInterval: (seconds: number) => Promise<void>;
   onOpenProviders: () => void;
 }) {
+  const internalNowMs = useLiveClock(15_000, nowMsProp === undefined);
+  const nowMs = nowMsProp ?? internalNowMs;
+
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [editingProxy, setEditingProxy] = useState<ProxyWithQuota | null>(null);
@@ -120,6 +139,7 @@ export function ProxyPoolView({
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState<ProxyFilter>("all");
   const [showAllRows, setShowAllRows] = useState(false);
 
@@ -183,6 +203,56 @@ export function ProxyPoolView({
 
   // Bulk import form
   const [bulkText, setBulkText] = useState("");
+
+  const { externalNodes, healthyCount, timeoutCount, distinctIps, avgDelay } = useMemo(() => {
+    const ext = proxies.filter((p) => !p.is_direct);
+    let healthy = 0;
+    const ipSet = new Set<string>();
+    let delaySum = 0;
+    let delayCount = 0;
+    for (const p of ext) {
+      if (p.alive) {
+        healthy += 1;
+        if (p.latency_ms !== null && p.latency_ms > 0) {
+          delaySum += p.latency_ms;
+          delayCount += 1;
+        }
+      }
+      if (p.ip && p.ip.length > 0) ipSet.add(p.ip);
+    }
+    return {
+      externalNodes: ext,
+      healthyCount: healthy,
+      timeoutCount: ext.length - healthy,
+      distinctIps: ipSet.size,
+      avgDelay: delayCount > 0 ? Math.round(delaySum / delayCount) : null,
+    };
+  }, [proxies]);
+
+  const filtered = useMemo(() => {
+    const qLower = deferredSearch.trim().toLowerCase();
+    return externalNodes.filter((p) => {
+      if (filter === "healthy" && !p.alive) return false;
+      if (filter === "timeout" && p.alive) return false;
+      if (!qLower) return true;
+      return (
+        p.name.toLowerCase().includes(qLower) ||
+        p.proxy_type.toLowerCase().includes(qLower) ||
+        (p.ip || "").toLowerCase().includes(qLower) ||
+        (p.host || "").toLowerCase().includes(qLower) ||
+        String(p.port || "").includes(qLower)
+      );
+    });
+  }, [deferredSearch, externalNodes, filter]);
+
+  const visible = useMemo(
+    () => (showAllRows ? filtered : filtered.slice(0, 80)),
+    [filtered, showAllRows],
+  );
+  const allVisibleSelected = useMemo(
+    () => visible.length > 0 && visible.every((p) => selectedIds.has(p.id)),
+    [selectedIds, visible],
+  );
 
   if (loading && proxies.length === 0) {
     return <TableSkeleton rows={8} />;
@@ -306,43 +376,6 @@ export function ProxyPoolView({
       setSavingInterval(false);
     }
   }
-
-  const externalNodes = proxies.filter((p) => !p.is_direct);
-  const healthyCount = externalNodes.filter((p) => p.alive).length;
-  const timeoutCount = externalNodes.filter((p) => !p.alive).length;
-  const distinctIps = new Set(
-    externalNodes.map((p) => p.ip).filter((ip): ip is string => !!ip && ip.length > 0),
-  ).size;
-  const validDelays = externalNodes
-    .filter((p) => p.alive && p.latency_ms !== null && p.latency_ms > 0)
-    .map((p) => p.latency_ms as number);
-  const avgDelay =
-    validDelays.length > 0
-      ? Math.round(validDelays.reduce((a, b) => a + b, 0) / validDelays.length)
-      : null;
-
-  const nextAutoTestInSec =
-    lastAutoTestAt !== null
-      ? Math.max(0, Math.ceil((lastAutoTestAt + testIntervalSec * 1000 - nowMs) / 1000))
-      : null;
-
-  const qLower = search.trim().toLowerCase();
-  const filtered = externalNodes.filter((p) => {
-    if (filter === "healthy" && !p.alive) return false;
-    if (filter === "timeout" && p.alive) return false;
-    if (!qLower) return true;
-    return (
-      p.name.toLowerCase().includes(qLower) ||
-      p.proxy_type.toLowerCase().includes(qLower) ||
-      (p.ip || "").toLowerCase().includes(qLower) ||
-      (p.host || "").toLowerCase().includes(qLower) ||
-      String(p.port || "").includes(qLower)
-    );
-  });
-
-  const visible = showAllRows ? filtered : filtered.slice(0, 80);
-  const allVisibleSelected =
-    visible.length > 0 && visible.every((p) => selectedIds.has(p.id));
 
   function toggleRow(id: string) {
     setSelectedIds((prev) => {
@@ -503,7 +536,10 @@ export function ProxyPoolView({
               />
               <span className="font-mono text-[10px] text-[var(--text-muted)]">
                 s
-                {nextAutoTestInSec !== null ? ` (${nextAutoTestInSec}s)` : ""}
+                <AutoTestCountdown
+                  lastAutoTestAt={lastAutoTestAt}
+                  testIntervalSec={testIntervalSec}
+                />
               </span>
             </div>
 
@@ -694,7 +730,7 @@ export function ProxyPoolView({
                   return (
                     <tr
                       key={p.id}
-                      className={`group tr-row-interactive ${
+                      className={`cv-row group tr-row-interactive ${
                         checked
                           ? "bg-[var(--accent-soft)]/30"
                           : "hover:bg-[var(--bg-hover)]/60"
@@ -1154,4 +1190,4 @@ export function ProxyPoolView({
       </Modal>
     </div>
   );
-}
+});

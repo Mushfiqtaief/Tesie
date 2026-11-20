@@ -11,14 +11,25 @@ import {
 } from "../utils/format";
 import { Button, StatusPill } from "./UiPrimitives";
 
+const ATTEMPT_LEGS_CACHE = new Map<string, AttemptLeg[]>();
+const MAX_LEGS_CACHE_SIZE = 500;
+
 export function parseAttemptLegs(rawTrace?: string | null): AttemptLeg[] {
   if (!rawTrace) return [];
+  const cached = ATTEMPT_LEGS_CACHE.get(rawTrace);
+  if (cached !== undefined) return cached;
+  let parsedLegs: AttemptLeg[] = [];
   try {
     const parsed = JSON.parse(rawTrace);
-    return Array.isArray(parsed) ? (parsed as AttemptLeg[]) : [];
+    parsedLegs = Array.isArray(parsed) ? (parsed as AttemptLeg[]) : [];
   } catch {
-    return [];
+    parsedLegs = [];
   }
+  if (ATTEMPT_LEGS_CACHE.size >= MAX_LEGS_CACHE_SIZE) {
+    ATTEMPT_LEGS_CACHE.clear();
+  }
+  ATTEMPT_LEGS_CACHE.set(rawTrace, parsedLegs);
+  return parsedLegs;
 }
 
 export function sessionLabelForProvider(providerId: string): string {

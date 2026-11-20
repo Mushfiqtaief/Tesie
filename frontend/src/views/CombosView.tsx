@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -92,23 +92,59 @@ interface ChainDraftItem {
   level: string | null;
 }
 
+interface ProviderIndexMaps {
+  byId: Map<string, { item: ProviderCatalogItem; idx: number }>;
+  byPrefix: Map<string, { item: ProviderCatalogItem; idx: number }>;
+}
+
+function buildProviderIndexMaps(providers: ProviderCatalogItem[]): ProviderIndexMaps {
+  const byId = new Map<string, { item: ProviderCatalogItem; idx: number }>();
+  const byPrefix = new Map<string, { item: ProviderCatalogItem; idx: number }>();
+  for (let idx = 0; idx < providers.length; idx++) {
+    const p = providers[idx];
+    const idKey = p.id.toLowerCase();
+    if (!byId.has(idKey)) byId.set(idKey, { item: p, idx });
+    const prefKey = p.prefix.toLowerCase();
+    if (!byPrefix.has(prefKey)) byPrefix.set(prefKey, { item: p, idx });
+  }
+  return { byId, byPrefix };
+}
+
 function resolveModelProviderInfo(
   prefixedId: string,
   entry: OpenAiModelEntry | undefined,
   providers: ProviderCatalogItem[],
+  providerIndexMaps?: ProviderIndexMaps,
 ): { providerId: string; providerName: string; providerLogo: string; providerColor: string } {
   const slashIdx = prefixedId.indexOf("/");
   const prefix = slashIdx >= 0 ? prefixedId.slice(0, slashIdx).toLowerCase() : "";
   const ownedBy = entry?.owned_by?.toLowerCase() || "";
 
-  // 1. Check matching provider from configured providers catalog
-  const matched = providers.find(
-    (p) =>
-      p.id.toLowerCase() === prefix ||
-      p.prefix.toLowerCase() === prefix ||
-      p.id.toLowerCase() === ownedBy ||
-      p.prefix.toLowerCase() === ownedBy,
-  );
+  // 1. Check matching provider from configured providers catalog (O(1) via index maps when available)
+  let matched: ProviderCatalogItem | undefined;
+  if (providerIndexMaps) {
+    let bestIdx = Number.MAX_SAFE_INTEGER;
+    const candidates = [
+      providerIndexMaps.byId.get(prefix),
+      providerIndexMaps.byPrefix.get(prefix),
+      ownedBy ? providerIndexMaps.byId.get(ownedBy) : undefined,
+      ownedBy ? providerIndexMaps.byPrefix.get(ownedBy) : undefined,
+    ];
+    for (const c of candidates) {
+      if (c && c.idx < bestIdx) {
+        bestIdx = c.idx;
+        matched = c.item;
+      }
+    }
+  } else {
+    matched = providers.find(
+      (p) =>
+        p.id.toLowerCase() === prefix ||
+        p.prefix.toLowerCase() === prefix ||
+        p.id.toLowerCase() === ownedBy ||
+        p.prefix.toLowerCase() === ownedBy,
+    );
+  }
 
   if (matched) {
     return {
@@ -259,7 +295,7 @@ function formatComboModelSpec(baseModel: string, level: string | null): string {
   return `${cleanBase}(${level})`;
 }
 
-export function CombosView({
+export const CombosView = memo(function CombosView({
   combos,
   models,
   providers = [],
@@ -293,11 +329,13 @@ export function CombosView({
   const [strategy, setStrategy] = useState<ComboStrategy>("fallback");
   const [chain, setChain] = useState<ChainDraftItem[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
+  const deferredPickerSearch = useDeferredValue(pickerSearch);
   const [pickerCategory, setPickerCategory] = useState<string>("all");
   const [customModelInput, setCustomModelInput] = useState("");
   const [saving, setSaving] = useState(false);
 
   const catalogEntries = useMemo(() => {
+    const providerIndexMaps = buildProviderIndexMaps(providers);
     const map = new Map<string, CatalogModelMeta>();
     const list: CatalogModelMeta[] = [];
     for (const m of models) {
@@ -310,7 +348,7 @@ export function CombosView({
             ? `ovh/${m.id}`
             : `oc/${m.id}`;
       if (map.has(prefixedId)) continue;
-      const provInfo = resolveModelProviderInfo(prefixedId, m, providers);
+      const provInfo = resolveModelProviderInfo(prefixedId, m, providers, providerIndexMaps);
       const meta: CatalogModelMeta = {
         prefixedId,
         displayName: m.display_name || m.id,
@@ -566,7 +604,7 @@ export function CombosView({
       if (!matchProvider) return false;
     }
 
-    const pq = pickerSearch.trim().toLowerCase();
+    const pq = deferredPickerSearch.trim().toLowerCase();
     if (!pq) return true;
     return (
       meta.prefixedId.toLowerCase().includes(pq) ||
@@ -1170,4 +1208,4 @@ export function CombosView({
       </Modal>
     </div>
   );
-}
+});

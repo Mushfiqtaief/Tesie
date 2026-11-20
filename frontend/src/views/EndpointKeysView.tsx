@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { memo, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   ArrowRight,
   Check,
@@ -29,11 +30,11 @@ import { formatCompactNumber, formatTimeAgo } from "../utils/format";
 
 type SnippetTab = "curl" | "python" | "typescript" | "anthropic";
 
-export function EndpointKeysView({
+export const EndpointKeysView = memo(function EndpointKeysView({
   keys,
   sampleModel,
   loading,
-  nowMs,
+  nowMs: nowMsProp,
   onCreateKey,
   onUpdateKey,
   onDeleteKey,
@@ -42,12 +43,14 @@ export function EndpointKeysView({
   keys: ApiKeyView[];
   sampleModel: string;
   loading: boolean;
-  nowMs: number;
+  nowMs?: number;
   onCreateKey: (payload: CreateApiKeyPayload) => Promise<CreatedApiKeyResponse>;
   onUpdateKey: (id: string, payload: UpdateApiKeyPayload) => Promise<void>;
   onDeleteKey: (id: string, name: string) => Promise<void>;
   onOpenCliTools: () => void;
 }) {
+  const internalNowMs = useLiveClock(10_000, nowMsProp === undefined);
+  const nowMs = nowMsProp ?? internalNowMs;
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [snippetTab, setSnippetTab] = useState<SnippetTab>("curl");
   const [revealedIds, setRevealedIds] = useState<Record<string, boolean>>({});
@@ -495,4 +498,4 @@ const { text } = await generateText({
       </Modal>
     </div>
   );
-}
+});

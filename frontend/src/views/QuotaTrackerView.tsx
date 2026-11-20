@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   AlertCircle,
   Check,
@@ -98,7 +99,7 @@ function isAgAccountCooling(acct: AntigravityAccountView, nowMs: number): boolea
 
 
 
-export function QuotaTrackerView({
+export const QuotaTrackerView = memo(function QuotaTrackerView({
   providers = [],
   providerQuotas,
   ipQuotas,
@@ -111,7 +112,7 @@ export function QuotaTrackerView({
   loading,
   onNotify,
   onOpenProviderSettings,
-  nowMs,
+  nowMs: nowMsProp,
   onRefreshQuotas,
   onProbeQuotasNow,
   onResetIpQuota,
@@ -134,7 +135,7 @@ export function QuotaTrackerView({
   loading: boolean;
   onNotify?: (message: string, isError?: boolean) => void;
   onOpenProviderSettings: (providerId: string) => void;
-  nowMs: number;
+  nowMs?: number;
   onRefreshQuotas: () => Promise<void>;
   onProbeQuotasNow?: () => Promise<void>;
   onResetIpQuota: (ipKey: string) => Promise<void>;
@@ -155,10 +156,11 @@ export function QuotaTrackerView({
     initialProviderId || "opencode",
   );
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [ipFilter, setIpFilter] = useState<IpPoolFilter>("all");
   const [agFilter, setAgFilter] = useState<AgAccountFilter>("all");
   const [viewMode, setViewMode] = useState<QuotaViewMode>(() => readInitialViewMode());
-  const [showAllBuckets, setShowAllBuckets] = useState(false);
+  const [visibleBucketLimit, setVisibleBucketLimit] = useState(48);
   const [syncing, setSyncing] = useState(false);
   const [verifyingIpKey, setVerifyingIpKey] = useState<string | null>(null);
   const [verifyingAll, setVerifyingAll] = useState(false);
@@ -195,7 +197,7 @@ export function QuotaTrackerView({
   }, [initialProviderId]);
 
   useEffect(() => {
-    setShowAllBuckets(false);
+    setVisibleBucketLimit(48);
   }, [search, ipFilter, agFilter, selectedProviderId]);
 
   function handleChangeViewMode(next: QuotaViewMode) {
@@ -210,11 +212,162 @@ export function QuotaTrackerView({
   const agAccounts = antigravityAccounts ?? [];
   const hasAntigravityAccounts = agAccounts.length > 0;
 
+  const hasShortCountdown = useMemo(() => {
+    const refNow = Date.now();
+    const withinWindow = (ts?: number | null) =>
+      typeof ts === "number" && ts > refNow && ts - refNow < 90_000;
+    for (const q of ipQuotas) {
+      if (q.status === "cooldown" && withinWindow(q.cooldown_until)) return true;
+    }
+    for (const acct of agAccounts) {
+      if (withinWindow(acct.cooldown_until)) return true;
+      for (const mq of acct.quota?.models ?? []) {
+        if (withinWindow(mq.session_reset_at)) return true;
+      }
+    }
+    return false;
+  }, [ipQuotas, agAccounts]);
+
+  const internalNowMs = useLiveClock(
+    hasShortCountdown ? 1000 : 15_000,
+    nowMsProp === undefined,
+  );
+  const nowMs = nowMsProp ?? internalNowMs;
+
   useEffect(() => {
     if (!hasAntigravityAccounts && selectedProviderId === "antigravity") {
       setSelectedProviderId("opencode");
     }
   }, [hasAntigravityAccounts, selectedProviderId]);
+
+  const qLower = deferredSearch.trim().toLowerCase();
+
+  const {
+    exportableProxies,
+    unexportableCount,
+    healthyProxies,
+    readyProxies,
+  } = useMemo(() => {
+    const nonDirect = proxies.filter((p) => !p.is_direct);
+    const exportable = nonDirect.filter((p) => !!proxyExportUrl(p));
+    const healthy = exportable.filter((p) => p.enabled && p.alive);
+    const coolingSet = new Set(
+      ipQuotas.filter((q) => q.status === "cooldown").map((q) => q.ip_key),
+    );
+    const ready = exportable.filter(
+      (p) => !coolingSet.has(p.ip_key) && p.enabled && p.alive,
+    );
+    return {
+      exportableProxies: exportable,
+      unexportableCount: nonDirect.length - exportable.length,
+      healthyProxies: healthy,
+      readyProxies: ready,
+    };
+  }, [proxies, ipQuotas]);
+
+  const exportScopes = useMemo(
+    () =>
+      ({
+        ready: { proxies: readyProxies, label: `Ready only (${readyProxies.length})` },
+        working: { proxies: healthyProxies, label: `Working only (${healthyProxies.length})` },
+        all: { proxies: exportableProxies, label: `Everything (${exportableProxies.length})` },
+      }) as const,
+    [exportableProxies, healthyProxies, readyProxies],
+  );
+
+  const exportLines = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          exportScopes[exportScope]
+            .proxies.map(proxyExportUrl)
+            .filter((line): line is string => !!line),
+        ),
+      ),
+    [exportScope, exportScopes],
+  );
+
+  const { realCoolingCount, realReadyCount } = useMemo(() => {
+    let cooling = 0;
+    for (const q of ipQuotas) {
+      if (q.status === "cooldown") cooling += 1;
+    }
+    return {
+      realCoolingCount: cooling,
+      realReadyCount: Math.max(0, ipQuotas.length - cooling),
+    };
+  }, [ipQuotas]);
+
+  const filteredIpQuotas = useMemo(
+    () =>
+      ipQuotas
+        .filter((q) => {
+          const isCooling = q.status === "cooldown";
+          if (ipFilter === "active" && isCooling) return false;
+          if (ipFilter === "cooling" && !isCooling) return false;
+          if (!qLower) return true;
+          return (
+            q.ip_key.toLowerCase().includes(qLower) ||
+            q.proxies.some((p) => p.toLowerCase().includes(qLower)) ||
+            formatCooldownReason(q.last_error).toLowerCase().includes(qLower)
+          );
+        })
+        .sort((a, b) => {
+          const aCool = a.status === "cooldown" ? 1 : 0;
+          const bCool = b.status === "cooldown" ? 1 : 0;
+          if (aCool !== bCool) return bCool - aCool;
+          const aUsed = a.last_used_at ?? 0;
+          const bUsed = b.last_used_at ?? 0;
+          if (aUsed !== bUsed) return bUsed - aUsed;
+          return a.ip_key.localeCompare(b.ip_key);
+        }),
+    [ipFilter, ipQuotas, qLower],
+  );
+
+  const visibleIpQuotas = useMemo(
+    () => filteredIpQuotas.slice(0, visibleBucketLimit),
+    [filteredIpQuotas, visibleBucketLimit],
+  );
+
+  const { agDisabledCount, agCoolingCount, agReadyCount, filteredAgAccounts } = useMemo(() => {
+    let disabledCount = 0;
+    let coolingCount = 0;
+    for (const acct of agAccounts) {
+      const disabled = !acct.enabled || isAgAccountBanned(acct);
+      const cooling = isAgAccountCooling(acct, nowMs);
+      if (disabled) disabledCount += 1;
+      else if (cooling) coolingCount += 1;
+    }
+    const filtered = agAccounts.filter((acct) => {
+      const disabled = !acct.enabled || isAgAccountBanned(acct);
+      const cooling = isAgAccountCooling(acct, nowMs);
+      if (agFilter === "cooling" && !cooling) return false;
+      if (agFilter === "ready" && (disabled || cooling)) return false;
+      if (agFilter === "disabled" && !disabled) return false;
+
+      if (!qLower) return true;
+      const matchAccount =
+        acct.name.toLowerCase().includes(qLower) ||
+        (acct.email || "").toLowerCase().includes(qLower) ||
+        (acct.quota?.plan || "").toLowerCase().includes(qLower) ||
+        (acct.partition?.primary_proxy?.name || "").toLowerCase().includes(qLower);
+      const matchModel = (acct.quota?.models ?? []).some(
+        (m) =>
+          m.model.toLowerCase().includes(qLower) ||
+          (m.display_name || "").toLowerCase().includes(qLower),
+      );
+      const matchPool = (acct.quota?.pools ?? []).some((p) =>
+        p.group_name.toLowerCase().includes(qLower),
+      );
+      return matchAccount || matchModel || matchPool;
+    });
+    return {
+      agDisabledCount: disabledCount,
+      agCoolingCount: coolingCount,
+      agReadyCount: Math.max(0, agAccounts.length - disabledCount - coolingCount),
+      filteredAgAccounts: filtered,
+    };
+  }, [agAccounts, agFilter, nowMs, qLower]);
 
   if (loading && providerQuotas.length === 0 && ipQuotas.length === 0) {
     return <QuotaPageSkeleton />;
@@ -394,92 +547,6 @@ export function QuotaTrackerView({
       setSavingLimits(false);
     }
   }
-
-  const qLower = search.trim().toLowerCase();
-
-  const exportableProxies = proxies.filter((p) => !p.is_direct && !!proxyExportUrl(p));
-  const unexportableCount = proxies.filter((p) => !p.is_direct).length - exportableProxies.length;
-  const healthyProxies = exportableProxies.filter((p) => p.enabled && p.alive);
-
-  // Proxies whose exit IP is tagged cooldown by OpenCode Free quota tracking.
-  const coolingIpKeys = new Set(
-    ipQuotas.filter((q) => q.status === "cooldown").map((q) => q.ip_key),
-  );
-  const readyProxies = exportableProxies.filter(
-    (p) => !coolingIpKeys.has(p.ip_key) && p.enabled && p.alive,
-  );
-
-  const exportScopes = {
-    ready: { proxies: readyProxies, label: `Ready only (${readyProxies.length})` },
-    working: { proxies: healthyProxies, label: `Working only (${healthyProxies.length})` },
-    all: { proxies: exportableProxies, label: `Everything (${exportableProxies.length})` },
-  } as const;
-
-  const exportLines = Array.from(
-    new Set(
-      exportScopes[exportScope]
-        .proxies.map(proxyExportUrl)
-        .filter((line): line is string => !!line),
-    ),
-  );
-
-  // Cooling stays true as long as `q.status === "cooldown"` (only cleared when real OpenCode usage is verified!)
-  const realCoolingCount = ipQuotas.filter((q) => q.status === "cooldown").length;
-  const realReadyCount = Math.max(0, ipQuotas.length - realCoolingCount);
-
-  const filteredIpQuotas = ipQuotas
-    .filter((q) => {
-      const isCooling = q.status === "cooldown";
-      if (ipFilter === "active" && isCooling) return false;
-      if (ipFilter === "cooling" && !isCooling) return false;
-      if (!qLower) return true;
-      return (
-        q.ip_key.toLowerCase().includes(qLower) ||
-        q.proxies.some((p) => p.toLowerCase().includes(qLower)) ||
-        formatCooldownReason(q.last_error).toLowerCase().includes(qLower)
-      );
-    })
-    .sort((a, b) => {
-      const aCool = a.status === "cooldown" ? 1 : 0;
-      const bCool = b.status === "cooldown" ? 1 : 0;
-      if (aCool !== bCool) return bCool - aCool;
-      const aUsed = a.last_used_at ?? 0;
-      const bUsed = b.last_used_at ?? 0;
-      if (aUsed !== bUsed) return bUsed - aUsed;
-      return a.ip_key.localeCompare(b.ip_key);
-    });
-
-  const visibleIpQuotas = showAllBuckets ? filteredIpQuotas : filteredIpQuotas.slice(0, 48);
-
-  const agDisabledCount = agAccounts.filter(
-    (acct) => !acct.enabled || isAgAccountBanned(acct),
-  ).length;
-  const agCoolingCount = agAccounts.filter((acct) => isAgAccountCooling(acct, nowMs)).length;
-  const agReadyCount = Math.max(0, agAccounts.length - agDisabledCount - agCoolingCount);
-
-  const filteredAgAccounts = agAccounts.filter((acct) => {
-    const disabled = !acct.enabled || isAgAccountBanned(acct);
-    const cooling = isAgAccountCooling(acct, nowMs);
-    if (agFilter === "cooling" && !cooling) return false;
-    if (agFilter === "ready" && (disabled || cooling)) return false;
-    if (agFilter === "disabled" && !disabled) return false;
-
-    if (!qLower) return true;
-    const matchAccount =
-      acct.name.toLowerCase().includes(qLower) ||
-      (acct.email || "").toLowerCase().includes(qLower) ||
-      (acct.quota?.plan || "").toLowerCase().includes(qLower) ||
-      (acct.partition?.primary_proxy?.name || "").toLowerCase().includes(qLower);
-    const matchModel = (acct.quota?.models ?? []).some(
-      (m) =>
-        m.model.toLowerCase().includes(qLower) ||
-        (m.display_name || "").toLowerCase().includes(qLower),
-    );
-    const matchPool = (acct.quota?.pools ?? []).some((p) =>
-      p.group_name.toLowerCase().includes(qLower),
-    );
-    return matchAccount || matchModel || matchPool;
-  });
 
   const scopedCatalogProvider = providers.find((p) => p.id === activeProvider.id);
   const scopedSelectedCount = scopedCatalogProvider?.config.selected_proxy_ids?.length;
@@ -833,29 +900,29 @@ export function QuotaTrackerView({
                 >
                   {/* Status Corner Ribbon (Unified across all account states) */}
                   {isBanned ? (
-                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 shadow-sm">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
                       <span>Banned · Auto-disabled</span>
                     </div>
                   ) : cooling ? (
-                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 shadow-sm">
                       <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                       <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
                     </div>
                   ) : !acct.enabled ? (
                     acct.last_error && /license|gemini code assist/i.test(acct.last_error) ? (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
                         <span>Disabled · License Inactive</span>
                       </div>
                     ) : (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 backdrop-blur-md shadow-sm">
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
                         <span>Disabled · Inactive</span>
                       </div>
                     )
                   ) : (
-                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 backdrop-blur-md shadow-sm">
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 shadow-sm">
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
                       <span>Active · Serving Tokens</span>
                     </div>
@@ -1127,11 +1194,11 @@ export function QuotaTrackerView({
               return (
                 <article
                   key={q.ip_key}
-                  className={`group relative overflow-hidden flex flex-col justify-center gap-2 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
+                  className={`cv-card group relative overflow-hidden flex flex-col justify-center gap-2 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
                 >
                   {/* Status Corner Ribbon */}
                   {cooling && (
-                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm backdrop-blur-md">
+                    <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm">
                       <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                       <span>{cooldownBadgeLabel}</span>
                     </div>
@@ -1239,11 +1306,11 @@ export function QuotaTrackerView({
             return (
               <article
                 key={q.ip_key}
-                className={`group relative overflow-hidden flex flex-col justify-between gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
+                className={`cv-card group relative overflow-hidden flex flex-col justify-between gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] transition-[border-color,background-color] duration-150 ${cardSurface}`}
               >
                 {/* Status Corner Ribbon */}
                 {cooling && (
-                  <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm backdrop-blur-md">
+                  <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 shadow-sm">
                     <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                     <span>{cooldownBadgeLabel}</span>
                   </div>
@@ -1358,10 +1425,19 @@ export function QuotaTrackerView({
         </div>
       )}
 
-      {!isAntigravity && !showAllBuckets && filteredIpQuotas.length > 48 && (
-        <div className="flex justify-center pt-1">
-          <Button variant="secondary" onClick={() => setShowAllBuckets(true)}>
-            Show all {filteredIpQuotas.length} exit-IP buckets
+      {!isAntigravity && filteredIpQuotas.length > visibleIpQuotas.length && (
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <Button
+            variant="secondary"
+            onClick={() => setVisibleBucketLimit((v) => v + 96)}
+          >
+            Show +96 more ({visibleIpQuotas.length} / {filteredIpQuotas.length})
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => setVisibleBucketLimit(filteredIpQuotas.length)}
+          >
+            Show all ({filteredIpQuotas.length})
           </Button>
         </div>
       )}
@@ -1534,4 +1610,4 @@ export function QuotaTrackerView({
       </Modal>
     </div>
   );
-}
+});

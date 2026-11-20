@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { AntigravityAccountView, AntigravityPoolWindow } from "../types";
 import { formatCountdown } from "../utils/format";
 
@@ -33,7 +34,7 @@ interface AntigravityPoolsGaugesProps {
   nowMs: number;
 }
 
-export function AntigravityPoolsGauges({
+export const AntigravityPoolsGauges = memo(function AntigravityPoolsGauges({
   acct,
   isBanned,
   nowMs,
@@ -95,8 +96,8 @@ export function AntigravityPoolsGauges({
         <div className="flex items-center gap-2 shrink-0">
           <div className="w-16 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-300 ${activeBarColor}`}
-              style={{ width: `${pct}%` }}
+              className={`h-full w-full origin-left rounded-full transition-transform duration-300 ${activeBarColor}`}
+              style={{ transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})` }}
             />
           </div>
           <div className="flex items-center gap-1 font-mono text-xs font-semibold tabular-nums text-right min-w-[36px] justify-end">
@@ -157,4 +158,4 @@ export function AntigravityPoolsGauges({
       )}
     </div>
   );
-}
+});

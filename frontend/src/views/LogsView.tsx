@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -39,7 +39,7 @@ import {
   statusColorStyle,
 } from "../utils/format";
 
-export function LogsView({
+export const LogsView = memo(function LogsView({
   proxies,
   refreshSignal,
   onNotify,
@@ -55,9 +55,15 @@ export function LogsView({
   const [proxyFilter, setProxyFilter] = useState("");
   const [modelFilter, setModelFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [limit, setLimit] = useState(100);
   const [selected, setSelected] = useState<UsageLogRecord | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedSearch(search), search ? 250 : 0);
+    return () => window.clearTimeout(id);
+  }, [search]);
 
   const loadLogs = useCallback(async () => {
     setFetching(true);
@@ -67,7 +73,7 @@ export function LogsView({
         status: statusFilter || undefined,
         proxy: proxyFilter || undefined,
         model: modelFilter || undefined,
-        q: search.trim() || undefined,
+        q: debouncedSearch.trim() || undefined,
       });
       setLogs(data);
     } catch (err) {
@@ -76,7 +82,7 @@ export function LogsView({
       setFetching(false);
       setInitialLoading(false);
     }
-  }, [limit, modelFilter, onNotify, proxyFilter, search, statusFilter]);
+  }, [debouncedSearch, limit, modelFilter, onNotify, proxyFilter, statusFilter]);
 
   useEffect(() => {
     void loadLogs();
@@ -115,9 +121,34 @@ export function LogsView({
     }
   }
 
-  const distinctModels = Array.from(new Set(logs.map((l) => l.model))).sort();
-  const okCount = logs.filter((l) => l.status_code >= 200 && l.status_code < 300).length;
-  const errCount = logs.length - okCount;
+  const distinctModels = useMemo(
+    () => Array.from(new Set(logs.map((l) => l.model))).sort(),
+    [logs],
+  );
+  const { okCount, errCount } = useMemo(() => {
+    let ok = 0;
+    for (const l of logs) {
+      if (l.status_code >= 200 && l.status_code < 300) ok += 1;
+    }
+    return { okCount: ok, errCount: logs.length - ok };
+  }, [logs]);
+  const parsedLogRows = useMemo(
+    () =>
+      logs.map((log) => {
+        const legs = parseAttemptLegs(log.attempt_trace);
+        return {
+          log,
+          st: statusColorStyle(log.status_code),
+          ok: log.status_code >= 200 && log.status_code < 300,
+          attempts: log.attempt_count ?? 1,
+          legs,
+          legMeta: extractLegMeta(legs),
+          rowCopyId: `row-${log.id}`,
+          cleanErr: formatCooldownReason(log.error_detail) || log.error_kind || "",
+        };
+      }),
+    [logs],
+  );
 
   return (
     <div className="space-y-4">
@@ -288,21 +319,20 @@ export function LogsView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)] tabular-nums">
-                  {logs.map((log) => {
-                    const st = statusColorStyle(log.status_code);
-                    const ok = log.status_code >= 200 && log.status_code < 300;
-                    const attempts = log.attempt_count ?? 1;
-                    const legs = parseAttemptLegs(log.attempt_trace);
-                    const legMeta = extractLegMeta(legs);
-                    const rowCopyId = `row-${log.id}`;
-                    const cleanErr =
-                      formatCooldownReason(log.error_detail) || log.error_kind || "";
-
-                    return (
+                  {parsedLogRows.map(
+                    ({
+                      log,
+                      st,
+                      ok,
+                      attempts,
+                      legMeta,
+                      rowCopyId,
+                      cleanErr,
+                    }) => (
                       <tr
                         key={log.id}
                         onClick={() => setSelected(log)}
-                        className="tr-row-interactive cursor-pointer hover:bg-[var(--bg-hover)]/65"
+                        className="cv-row tr-row-interactive cursor-pointer hover:bg-[var(--bg-hover)]/65"
                       >
                         <td className="py-2.5 pl-4 pr-2 font-mono whitespace-nowrap text-[var(--text-muted)]">
                           {formatClockTime(log.created_at)}
@@ -452,8 +482,8 @@ export function LogsView({
                           </button>
                         </td>
                       </tr>
-                    );
-                  })}
+                    ),
+                  )}
                 </tbody>
               </table>
             </div>
@@ -472,4 +502,4 @@ export function LogsView({
       </SlideOverDrawer>
     </div>
   );
-}
+});

@@ -25,6 +25,7 @@ windows-sys = { version = "0.52", features = [
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
 hex.workspace = true
 rand.workspace = true

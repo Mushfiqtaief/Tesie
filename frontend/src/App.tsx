@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import {
   Activity,
   AlertCircle,
@@ -24,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, api, getStoredAdminToken, setStoredAdminToken } from "./api";
+import { DashboardSkeleton } from "./components/Skeleton";
 import { TesieLogo } from "./components/TesieLogo";
 import { Button, INPUT_CLASS, Modal, StatusPill } from "./components/UiPrimitives";
 import type {
@@ -59,19 +61,6 @@ import type {
   UsagePeriod,
   UsageSummary,
 } from "./types";
-import { CliToolsView } from "./views/CliToolsView";
-import { CombosView } from "./views/CombosView";
-import { DashboardView } from "./views/DashboardView";
-import { EndpointKeysView } from "./views/EndpointKeysView";
-import { LogsView } from "./views/LogsView";
-import { PlaygroundView } from "./views/PlaygroundView";
-import { ProvidersModelsView } from "./views/ProvidersModelsView";
-import { ProxyPoolView } from "./views/ProxyPoolView";
-import { QuotaTrackerView } from "./views/QuotaTrackerView";
-import { SettingsView } from "./views/SettingsView";
-import { TokenSaverView } from "./views/TokenSaverView";
-import { MultimodalBridgeView } from "./views/MultimodalBridgeView";
-
 type RoutePath =
   | "/"
   | "/logs"
@@ -86,7 +75,84 @@ type RoutePath =
   | "/playground"
   | "/settings";
 
+const ROUTE_LOADERS = {
+  "/": () => import("./views/DashboardView"),
+  "/logs": () => import("./views/LogsView"),
+  "/providers": () => import("./views/ProvidersModelsView"),
+  "/combos": () => import("./views/CombosView"),
+  "/token-saver": () => import("./views/TokenSaverView"),
+  "/bridge": () => import("./views/MultimodalBridgeView"),
+  "/quotas": () => import("./views/QuotaTrackerView"),
+  "/proxies": () => import("./views/ProxyPoolView"),
+  "/cli-tools": () => import("./views/CliToolsView"),
+  "/endpoint": () => import("./views/EndpointKeysView"),
+  "/playground": () => import("./views/PlaygroundView"),
+  "/settings": () => import("./views/SettingsView"),
+} as const;
+
+const prefetchedRoutes = new Set<string>();
+function prefetchRoute(path: RoutePath) {
+  if (prefetchedRoutes.has(path)) return;
+  prefetchedRoutes.add(path);
+  void ROUTE_LOADERS[path]();
+}
+
+const CliToolsView = lazy(() =>
+  ROUTE_LOADERS["/cli-tools"]().then((m) => ({ default: m.CliToolsView })),
+);
+const CombosView = lazy(() =>
+  ROUTE_LOADERS["/combos"]().then((m) => ({ default: m.CombosView })),
+);
+const DashboardView = lazy(() =>
+  ROUTE_LOADERS["/"]().then((m) => ({ default: m.DashboardView })),
+);
+const EndpointKeysView = lazy(() =>
+  ROUTE_LOADERS["/endpoint"]().then((m) => ({ default: m.EndpointKeysView })),
+);
+const LogsView = lazy(() =>
+  ROUTE_LOADERS["/logs"]().then((m) => ({ default: m.LogsView })),
+);
+const PlaygroundView = lazy(() =>
+  ROUTE_LOADERS["/playground"]().then((m) => ({ default: m.PlaygroundView })),
+);
+const ProvidersModelsView = lazy(() =>
+  ROUTE_LOADERS["/providers"]().then((m) => ({ default: m.ProvidersModelsView })),
+);
+const ProxyPoolView = lazy(() =>
+  ROUTE_LOADERS["/proxies"]().then((m) => ({ default: m.ProxyPoolView })),
+);
+const QuotaTrackerView = lazy(() =>
+  ROUTE_LOADERS["/quotas"]().then((m) => ({ default: m.QuotaTrackerView })),
+);
+const SettingsView = lazy(() =>
+  ROUTE_LOADERS["/settings"]().then((m) => ({ default: m.SettingsView })),
+);
+const TokenSaverView = lazy(() =>
+  ROUTE_LOADERS["/token-saver"]().then((m) => ({ default: m.TokenSaverView })),
+);
+const MultimodalBridgeView = lazy(() =>
+  ROUTE_LOADERS["/bridge"]().then((m) => ({ default: m.MultimodalBridgeView })),
+);
+
 type ThemeMode = "light" | "dark";
+
+const JSON_SIG_CACHE = new WeakMap<object, string>();
+function getJsonSig(val: unknown): string {
+  if (val === null || val === undefined || typeof val !== "object") {
+    return String(val);
+  }
+  let cached = JSON_SIG_CACHE.get(val);
+  if (cached === undefined) {
+    cached = JSON.stringify(val);
+    JSON_SIG_CACHE.set(val, cached);
+  }
+  return cached;
+}
+
+function setIfChanged<S, T extends S>(setter: Dispatch<SetStateAction<S>>, next: T) {
+  const nextSig = getJsonSig(next);
+  setter((prev) => (getJsonSig(prev) === nextSig ? prev : next));
+}
 
 interface NavItem {
   path: RoutePath;
@@ -249,8 +315,10 @@ export function App() {
   // Core gateway state
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [logsRefreshSignal, setLogsRefreshSignal] = useState(0);
+  const pollInFlightRef = useRef(false);
+  const initialBootRef = useRef(false);
+  const lastRoutePollRef = useRef<Record<string, number>>({});
 
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [topology, setTopology] = useState<TopologyResponse | null>(null);
@@ -299,7 +367,9 @@ export function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      setRoute(normalizeRoutePath(window.location.pathname));
+      startTransition(() => {
+        setRoute(normalizeRoutePath(window.location.pathname));
+      });
       try {
         setSelectedProviderId(new URLSearchParams(window.location.search).get("provider") || null);
       } catch {
@@ -322,9 +392,11 @@ export function App() {
     if (window.location.pathname + window.location.search !== url) {
       window.history.pushState({}, "", url);
     }
-    setRoute(targetPath);
+    startTransition(() => {
+      setRoute(targetPath);
+    });
     setMobileNavOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "auto" });
   }, []);
 
   const refreshLiveQuotas = useCallback(async () => {
@@ -334,12 +406,12 @@ export function App() {
         api.getProviderQuotasWithAccounts(),
         api.getProviders(),
       ]);
-      setIpQuotas(ipRes.ip_quotas);
-      setProviderQuotas(pqRes.providers);
-      setAntigravityAccounts(pqRes.antigravity_accounts);
-      setProvidersCatalog(provCat);
+      setIfChanged(setIpQuotas, ipRes.ip_quotas);
+      setIfChanged(setProviderQuotas, pqRes.providers);
+      setIfChanged(setAntigravityAccounts, pqRes.antigravity_accounts);
+      setIfChanged(setProvidersCatalog, provCat);
       if (ipRes.probe_status) {
-        setQuotaProbeStatus(ipRes.probe_status);
+        setIfChanged(setQuotaProbeStatus, ipRes.probe_status);
       }
       setLastQuotaSyncAt(
         ipRes.probe_status?.last_probe_at || ipRes.refreshed_at || Date.now(),
@@ -368,28 +440,29 @@ export function App() {
             api.getKeys(),
             api.getModels(),
           ]);
-        setStatus(st);
-        setTopology(topo);
-        setProvidersCatalog(provCat);
-        setCombos(cmbs);
-        setCliStatus(cliSt);
-        setProxies(pxMeta.proxies);
+        initialBootRef.current = true;
+        setIfChanged(setStatus, st);
+        setIfChanged(setTopology, topo);
+        setIfChanged(setProvidersCatalog, provCat);
+        setIfChanged(setCombos, cmbs);
+        setIfChanged(setCliStatus, cliSt);
+        setIfChanged(setProxies, pxMeta.proxies);
         setProxyTestIntervalSec(pxMeta.test_interval_sec);
         setLastAutoTestAt(pxMeta.last_auto_test_at);
-        setIpQuotas(ipMeta.ip_quotas);
+        setIfChanged(setIpQuotas, ipMeta.ip_quotas);
         if (ipMeta.probe_status) {
-          setQuotaProbeStatus(ipMeta.probe_status);
+          setIfChanged(setQuotaProbeStatus, ipMeta.probe_status);
         }
         if (ipMeta.probe_status?.last_probe_at) {
           setLastQuotaSyncAt(ipMeta.probe_status.last_probe_at);
         } else if (!opts?.silent) {
           setLastQuotaSyncAt(ipMeta.refreshed_at);
         }
-        setProviderQuotas(pqWithAccounts.providers);
-        setAntigravityAccounts(pqWithAccounts.antigravity_accounts);
-        setUsage(usg);
-        setKeys(ks);
-        setModels(mdls);
+        setIfChanged(setProviderQuotas, pqWithAccounts.providers);
+        setIfChanged(setAntigravityAccounts, pqWithAccounts.antigravity_accounts);
+        setIfChanged(setUsage, usg);
+        setIfChanged(setKeys, ks);
+        setIfChanged(setModels, mdls);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           setAuthModalOpen(true);
@@ -404,31 +477,193 @@ export function App() {
     [notify, period],
   );
 
-  // Core dashboard & TesieCore proxy state polling
-  useEffect(() => {
-    void loadAll({ silent: true });
-    const pollId = window.setInterval(() => {
-      if (!authModalOpen) {
-        void loadAll({ silent: true });
+  const pollForRoute = useCallback(
+    async (targetRoute: RoutePath) => {
+      if (authModalOpen || pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      lastRoutePollRef.current[targetRoute] = Date.now();
+      try {
+        if (targetRoute === "/") {
+          const [st, topo, usg, pxMeta] = await Promise.all([
+            api.getStatus(),
+            api.getTopology(),
+            api.getUsage(period, 50),
+            api.getProxiesWithMeta(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setTopology, topo);
+          setIfChanged(setUsage, usg);
+          setIfChanged(setProxies, pxMeta.proxies);
+          setProxyTestIntervalSec(pxMeta.test_interval_sec);
+          setLastAutoTestAt(pxMeta.last_auto_test_at);
+        } else if (targetRoute === "/proxies" || targetRoute === "/logs") {
+          const [st, pxMeta] = await Promise.all([api.getStatus(), api.getProxiesWithMeta()]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setProxies, pxMeta.proxies);
+          setProxyTestIntervalSec(pxMeta.test_interval_sec);
+          setLastAutoTestAt(pxMeta.last_auto_test_at);
+        } else if (targetRoute === "/quotas") {
+          const [st, pxMeta, ipRes, pqRes, provCat] = await Promise.all([
+            api.getStatus(),
+            api.getProxiesWithMeta(),
+            api.getIpQuotasWithMeta(),
+            api.getProviderQuotasWithAccounts(),
+            api.getProviders(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setProxies, pxMeta.proxies);
+          setProxyTestIntervalSec(pxMeta.test_interval_sec);
+          setLastAutoTestAt(pxMeta.last_auto_test_at);
+          setIfChanged(setIpQuotas, ipRes.ip_quotas);
+          setIfChanged(setProviderQuotas, pqRes.providers);
+          setIfChanged(setAntigravityAccounts, pqRes.antigravity_accounts);
+          setIfChanged(setProvidersCatalog, provCat);
+          if (ipRes.probe_status) {
+            setIfChanged(setQuotaProbeStatus, ipRes.probe_status);
+          }
+          setLastQuotaSyncAt(
+            ipRes.probe_status?.last_probe_at || ipRes.refreshed_at || Date.now(),
+          );
+        } else if (targetRoute === "/providers") {
+          const [st, pxMeta, provCat, ipRes, pqRes, mdls] = await Promise.all([
+            api.getStatus(),
+            api.getProxiesWithMeta(),
+            api.getProviders(),
+            api.getIpQuotasWithMeta(),
+            api.getProviderQuotasWithAccounts(),
+            api.getModels(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setProxies, pxMeta.proxies);
+          setProxyTestIntervalSec(pxMeta.test_interval_sec);
+          setLastAutoTestAt(pxMeta.last_auto_test_at);
+          setIfChanged(setProvidersCatalog, provCat);
+          setIfChanged(setIpQuotas, ipRes.ip_quotas);
+          setIfChanged(setProviderQuotas, pqRes.providers);
+          setIfChanged(setAntigravityAccounts, pqRes.antigravity_accounts);
+          if (ipRes.probe_status) {
+            setIfChanged(setQuotaProbeStatus, ipRes.probe_status);
+          }
+          setLastQuotaSyncAt(
+            ipRes.probe_status?.last_probe_at || ipRes.refreshed_at || Date.now(),
+          );
+          setIfChanged(setModels, mdls);
+        } else if (targetRoute === "/combos") {
+          const [st, cmbs, provCat, mdls] = await Promise.all([
+            api.getStatus(),
+            api.getCombos(),
+            api.getProviders(),
+            api.getModels(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setCombos, cmbs);
+          setIfChanged(setProvidersCatalog, provCat);
+          setIfChanged(setModels, mdls);
+        } else if (targetRoute === "/cli-tools") {
+          const [st, cliSt, mdls, cmbs, ks] = await Promise.all([
+            api.getStatus(),
+            api.getCliToolsStatus(),
+            api.getModels(),
+            api.getCombos(),
+            api.getKeys(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setCliStatus, cliSt);
+          setIfChanged(setModels, mdls);
+          setIfChanged(setCombos, cmbs);
+          setIfChanged(setKeys, ks);
+        } else if (targetRoute === "/endpoint") {
+          const [st, ks, cmbs] = await Promise.all([
+            api.getStatus(),
+            api.getKeys(),
+            api.getCombos(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setKeys, ks);
+          setIfChanged(setCombos, cmbs);
+        } else if (targetRoute === "/playground") {
+          const [st, mdls, ks] = await Promise.all([
+            api.getStatus(),
+            api.getModels(),
+            api.getKeys(),
+          ]);
+          setIfChanged(setStatus, st);
+          setIfChanged(setModels, mdls);
+          setIfChanged(setKeys, ks);
+        } else {
+          const st = await api.getStatus();
+          setIfChanged(setStatus, st);
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthModalOpen(true);
+        }
+      } finally {
+        pollInFlightRef.current = false;
       }
-    }, 5000);
-    return () => window.clearInterval(pollId);
-  }, [authModalOpen, loadAll]);
+    },
+    [authModalOpen, period],
+  );
 
-  // Dedicated 30-second live per-IP quota check loop
+  // Initial full bootstrap load
   useEffect(() => {
+    if (!initialBootRef.current) {
+      void loadAll({ silent: true });
+    }
+  }, [loadAll]);
+
+  // Route-scoped, visibility-aware smart polling
+  useEffect(() => {
+    if (authModalOpen) return;
+
+    const intervalMs =
+      route === "/" || route === "/proxies"
+        ? 5000
+        : route === "/quotas" || route === "/providers" || route === "/logs"
+          ? 10_000
+          : route === "/combos" || route === "/cli-tools" || route === "/endpoint"
+            ? 15_000
+            : 30_000;
+
+    if (
+      initialBootRef.current &&
+      !document.hidden &&
+      Date.now() - (lastRoutePollRef.current[route] ?? 0) > 4000
+    ) {
+      void pollForRoute(route);
+    }
+
+    const pollId = window.setInterval(() => {
+      if (!document.hidden) {
+        void pollForRoute(route);
+      }
+    }, intervalMs);
+
+    const onVisibility = () => {
+      if (!document.hidden && !authModalOpen) {
+        void pollForRoute(route);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.clearInterval(pollId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [authModalOpen, pollForRoute, route]);
+
+  // Dedicated 30-second live per-IP quota check loop (only on quota-bearing routes while visible)
+  useEffect(() => {
+    if (authModalOpen) return;
+    if (route !== "/" && route !== "/providers" && route !== "/quotas") return;
+
     const quotaId = window.setInterval(() => {
-      if (!authModalOpen) {
+      if (!document.hidden) {
         void refreshLiveQuotas();
       }
     }, 30_000);
     return () => window.clearInterval(quotaId);
-  }, [authModalOpen, refreshLiveQuotas]);
-
-  useEffect(() => {
-    const tickId = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(tickId);
-  }, []);
+  }, [authModalOpen, refreshLiveQuotas, route]);
 
   function handleChangePeriod(next: UsagePeriod) {
     setPeriod(next);
@@ -978,22 +1213,76 @@ export function App() {
     void loadAll();
   }
 
-  const allNavItems = NAV_GROUPS.flatMap((g) => g.items);
-  const currentMeta = allNavItems.find((i) => i.path === route) ?? allNavItems[0];
+  const allNavItems = useMemo(() => NAV_GROUPS.flatMap((g) => g.items), []);
+  const currentMeta = useMemo(
+    () => allNavItems.find((i) => i.path === route) ?? allNavItems[0],
+    [allNavItems, route],
+  );
   const activeStreamCount = topology?.active_requests.length ?? 0;
-  const sampleModel =
-    combos.find((c) => c.enabled)?.name || "oc/deepseek-v4.1-flash-free";
+  const sampleModel = useMemo(
+    () => combos.find((c) => c.enabled)?.name || "oc/deepseek-v4.1-flash-free",
+    [combos],
+  );
   const coreOnline = Boolean(status?.core_healthy ?? status?.mihomo_healthy);
-  const externalProxies = proxies.filter((p) => !p.is_direct);
-  const healthyProxiesCount = externalProxies.filter((p) => p.alive).length;
-  const timeoutProxiesCount = externalProxies.filter((p) => !p.alive).length;
-  const validProxyDelays = externalProxies
-    .filter((p) => p.alive && p.latency_ms !== null && p.latency_ms > 0)
-    .map((p) => p.latency_ms as number);
-  const avgProxyLatencyMs =
-    validProxyDelays.length > 0
-      ? Math.round(validProxyDelays.reduce((a, b) => a + b, 0) / validProxyDelays.length)
-      : null;
+  const externalProxies = useMemo(() => proxies.filter((p) => !p.is_direct), [proxies]);
+  const { healthyProxiesCount, timeoutProxiesCount, avgProxyLatencyMs } = useMemo(() => {
+    let healthy = 0;
+    let timedOut = 0;
+    let delaySum = 0;
+    let delayCount = 0;
+    for (const p of externalProxies) {
+      if (p.alive) {
+        healthy += 1;
+        if (p.latency_ms !== null && p.latency_ms > 0) {
+          delaySum += p.latency_ms;
+          delayCount += 1;
+        }
+      } else {
+        timedOut += 1;
+      }
+    }
+    return {
+      healthyProxiesCount: healthy,
+      timeoutProxiesCount: timedOut,
+      avgProxyLatencyMs: delayCount > 0 ? Math.round(delaySum / delayCount) : null,
+    };
+  }, [externalProxies]);
+
+  const handleInspectProviderQuota = useCallback(
+    (pid: string) => {
+      setSelectedQuotaProviderId(pid);
+      navigate("/quotas");
+    },
+    [navigate],
+  );
+  const handleOpenAllLogs = useCallback(() => navigate("/logs"), [navigate]);
+  const handleSelectProvider = useCallback(
+    (pid: string | null) => {
+      setSelectedProviderId(pid);
+      navigate("/providers", pid ? { provider: pid } : undefined);
+    },
+    [navigate],
+  );
+  const handleOpenProxyPool = useCallback(() => navigate("/proxies"), [navigate]);
+  const handleOpenProviders = useCallback(() => navigate("/providers"), [navigate]);
+  const handleOpenCliTools = useCallback(() => navigate("/cli-tools"), [navigate]);
+  const handleOpenProviderSettings = useCallback(
+    (pid: string) => {
+      setSelectedProviderId(pid);
+      navigate("/providers", { provider: pid });
+    },
+    [navigate],
+  );
+  const handlePlaygroundCompleted = useCallback(() => {
+    setLogsRefreshSignal((n) => n + 1);
+    void loadAll({ silent: true });
+  }, [loadAll]);
+  const handleSettingsReloadAll = useCallback(async () => {
+    await loadAll({ silent: true });
+  }, [loadAll]);
+  const handleAutostartChanged = useCallback((enabled: boolean) => {
+    setStatus((prev) => (prev ? { ...prev, auto_start_enabled: enabled } : prev));
+  }, []);
 
   const sidebarContent = (
     <div className="flex h-full flex-col justify-between p-4 sm:p-5">
@@ -1038,6 +1327,8 @@ export function App() {
                     key={item.path}
                     type="button"
                     onClick={() => navigate(item.path)}
+                    onMouseEnter={() => prefetchRoute(item.path)}
+                    onFocus={() => prefetchRoute(item.path)}
                     className={`flex w-full items-center justify-between gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors ${
                       active
                         ? "border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)]"
@@ -1136,7 +1427,7 @@ export function App() {
 
       {/* Main Content */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/92 px-4 backdrop-blur-md sm:px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/98 px-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -1247,6 +1538,7 @@ export function App() {
 
         <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-6 sm:px-6">
           <div key={route} className="animate-view-enter">
+            <Suspense fallback={<DashboardSkeleton />}>
             {route === "/" && (
               <DashboardView
                 period={period}
@@ -1254,12 +1546,8 @@ export function App() {
                 usage={usage}
                 topology={topology}
                 loading={loading}
-                nowMs={nowMs}
-                onInspectProviderQuota={(pid) => {
-                  setSelectedQuotaProviderId(pid);
-                  navigate("/quotas");
-                }}
-                onOpenAllLogs={() => navigate("/logs")}
+                onInspectProviderQuota={handleInspectProviderQuota}
+                onOpenAllLogs={handleOpenAllLogs}
               />
             )}
 
@@ -1279,21 +1567,14 @@ export function App() {
                 ipQuotas={ipQuotas}
                 antigravityAccounts={antigravityAccounts}
                 initialProviderId={selectedProviderId}
-                onSelectProvider={(pid) => {
-                  setSelectedProviderId(pid);
-                  navigate("/providers", pid ? { provider: pid } : undefined);
-                }}
+                onSelectProvider={handleSelectProvider}
                 lastQuotaSyncAt={lastQuotaSyncAt}
                 quotaProbeStatus={quotaProbeStatus}
                 probingQuotas={probingQuotas}
                 loading={loading}
-                nowMs={nowMs}
                 onTestModel={handleTestModel}
-                onOpenQuotaTracker={(pid) => {
-                  setSelectedQuotaProviderId(pid);
-                  navigate("/quotas");
-                }}
-                onOpenProxyPool={() => navigate("/proxies")}
+                onOpenQuotaTracker={handleInspectProviderQuota}
+                onOpenProxyPool={handleOpenProxyPool}
                 onRefreshQuotas={refreshLiveQuotas}
                 onProbeQuotasNow={handleProbeQuotasNow}
                 onUpdateProviderConfig={handleUpdateProviderConfig}
@@ -1328,11 +1609,11 @@ export function App() {
             )}
 
             {route === "/token-saver" && (
-              <TokenSaverView nowMs={nowMs} onNotify={notify} />
+              <TokenSaverView onNotify={notify} />
             )}
 
             {route === "/bridge" && (
-              <MultimodalBridgeView onNotify={notify} />
+              <MultimodalBridgeView models={models} onNotify={notify} />
             )}
 
             {route === "/quotas" && (
@@ -1348,11 +1629,7 @@ export function App() {
                 probingQuotas={probingQuotas}
                 loading={loading}
                 onNotify={notify}
-                onOpenProviderSettings={(pid) => {
-                  setSelectedProviderId(pid);
-                  navigate("/providers", { provider: pid });
-                }}
-                nowMs={nowMs}
+                onOpenProviderSettings={handleOpenProviderSettings}
                 onRefreshQuotas={refreshLiveQuotas}
                 onProbeQuotasNow={handleProbeQuotasNow}
                 onResetIpQuota={handleResetIpQuota}
@@ -1371,7 +1648,6 @@ export function App() {
                 testIntervalSec={proxyTestIntervalSec}
                 lastAutoTestAt={lastAutoTestAt}
                 loading={loading}
-                nowMs={nowMs}
                 testingAll={testingAllProxies}
                 onCreateProxy={handleCreateProxy}
                 onUpdateProxy={handleUpdateProxy}
@@ -1382,7 +1658,7 @@ export function App() {
                 onTestAll={handleTestAllProxies}
                 onTestOne={handleTestSingleProxy}
                 onUpdateTestInterval={handleUpdateTestInterval}
-                onOpenProviders={() => navigate("/providers")}
+                onOpenProviders={handleOpenProviders}
               />
             )}
 
@@ -1408,11 +1684,10 @@ export function App() {
                 keys={keys}
                 sampleModel={sampleModel}
                 loading={loading}
-                nowMs={nowMs}
                 onCreateKey={handleCreateKey}
                 onUpdateKey={handleUpdateKey}
                 onDeleteKey={handleDeleteKey}
-                onOpenCliTools={() => navigate("/cli-tools")}
+                onOpenCliTools={handleOpenCliTools}
               />
             )}
 
@@ -1421,24 +1696,18 @@ export function App() {
                 models={models}
                 keys={keys}
                 initialModel={playgroundModel}
-                onCompleted={() => {
-                  setLogsRefreshSignal((n) => n + 1);
-                  void loadAll({ silent: true });
-                }}
+                onCompleted={handlePlaygroundCompleted}
               />
             )}
 
             {route === "/settings" && (
               <SettingsView
                 onNotify={notify}
-                onReloadAll={async () => {
-                  await loadAll({ silent: true });
-                }}
-                onAutostartChanged={(enabled) =>
-                  setStatus((prev) => (prev ? { ...prev, auto_start_enabled: enabled } : prev))
-                }
+                onReloadAll={handleSettingsReloadAll}
+                onAutostartChanged={handleAutostartChanged}
               />
             )}
+            </Suspense>
           </div>
         </main>
       </div>

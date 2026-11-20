@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -161,7 +162,7 @@ function configToProxySelection(cfg: ProviderConfig): ProxySelectionValue {
   return { proxyMode: "all", selectedProxyIds: [] };
 }
 
-export function ProvidersModelsView({
+export const ProvidersModelsView = memo(function ProvidersModelsView({
   providers,
   proxies,
   models,
@@ -173,7 +174,7 @@ export function ProvidersModelsView({
   quotaProbeStatus,
   probingQuotas,
   loading,
-  nowMs,
+  nowMs: nowMsProp,
   onTestModel,
   onOpenQuotaTracker,
   onOpenProxyPool,
@@ -206,7 +207,7 @@ export function ProvidersModelsView({
   quotaProbeStatus?: QuotaProbeStatus | null;
   probingQuotas?: boolean;
   loading: boolean;
-  nowMs: number;
+  nowMs?: number;
   onTestModel: (modelId: string) => void;
   onOpenQuotaTracker: (providerId: string) => void;
   onOpenProxyPool: () => void;
@@ -249,6 +250,7 @@ export function ProvidersModelsView({
     initialProviderId ?? null,
   );
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [modelsViewMode, setModelsViewMode] = useState<"table" | "card">(() => {
     try {
       const saved = localStorage.getItem("tesie_provider_models_view");
@@ -603,9 +605,47 @@ export function ProvidersModelsView({
     );
   }, [models, activeProvider]);
 
+  const hasShortCountdown = useMemo(() => {
+    const refNow = Date.now();
+    const withinWindow = (ts?: number | null) =>
+      typeof ts === "number" && ts > refNow && ts - refNow < 90_000;
+    for (const q of ipQuotas) {
+      if (q.status === "cooldown" && withinWindow(q.cooldown_until)) return true;
+    }
+    for (const acct of antigravityAccounts) {
+      if (withinWindow(acct.cooldown_until)) return true;
+      for (const mq of acct.quota?.models ?? []) {
+        if (withinWindow(mq.session_reset_at)) return true;
+      }
+    }
+    return false;
+  }, [ipQuotas, antigravityAccounts]);
+
+  const internalNowMs = useLiveClock(
+    hasShortCountdown ? 1000 : 15_000,
+    nowMsProp === undefined,
+  );
+  const nowMs = nowMsProp ?? internalNowMs;
+
   const currentThinkingLevel = (
     activeProvider?.config.thinking_level || "auto"
   ).toLowerCase() as ThinkingLevel;
+
+  const activeQuotas = useMemo(
+    () =>
+      ipQuotas.filter(
+        (q) => !(q.status === "cooldown" && q.cooldown_until && q.cooldown_until > nowMs),
+      ).length,
+    [ipQuotas, nowMs],
+  );
+  const coolingQuotas = ipQuotas.length - activeQuotas;
+
+  const filteredModels = useMemo(() => {
+    const qLower = deferredSearch.trim().toLowerCase();
+    return providerModels.filter(
+      (full) => !qLower || full.toLowerCase().includes(qLower),
+    );
+  }, [deferredSearch, providerModels]);
 
   if (loading && providers.length === 0) {
     return <TableSkeleton rows={6} />;
@@ -1258,10 +1298,6 @@ export function ProvidersModelsView({
   }
 
   const isProbingLive = Boolean(probingQuotas || quotaProbeStatus?.probe_running);
-  const activeQuotas = ipQuotas.filter(
-    (q) => !(q.status === "cooldown" && q.cooldown_until && q.cooldown_until > nowMs),
-  ).length;
-  const coolingQuotas = ipQuotas.length - activeQuotas;
 
   function handleChangeModelsView(next: "table" | "card") {
     setModelsViewMode(next);
@@ -1271,11 +1307,6 @@ export function ProvidersModelsView({
       // ignore
     }
   }
-
-  const qLower = search.trim().toLowerCase();
-  const filteredModels = providerModels.filter(
-    (full) => !qLower || full.toLowerCase().includes(qLower),
-  );
 
   return (
     <div className="space-y-5 animate-tab-switch">
@@ -1667,29 +1698,29 @@ export function ProvidersModelsView({
                   >
                     {/* Status Corner Ribbon (Unified across all account states) */}
                     {isBanned ? (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 backdrop-blur-md shadow-sm">
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-rose-500/35 bg-rose-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-rose-400 shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
                         <span>Banned · Auto-disabled</span>
                       </div>
                     ) : cooling ? (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                         <span>Cooldown ({formatCountdown(acct.cooldown_until, nowMs)})</span>
                       </div>
                     ) : !acct.enabled ? (
                       acct.last_error && /license|gemini code assist/i.test(acct.last_error) ? (
-                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 backdrop-blur-md shadow-sm">
+                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-amber-500/35 bg-amber-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-amber-400 shadow-sm">
                           <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
                           <span>Disabled · License Inactive</span>
                         </div>
                       ) : (
-                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 backdrop-blur-md shadow-sm">
+                        <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-zinc-500/35 bg-zinc-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-zinc-400 shadow-sm">
                           <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
                           <span>Disabled · Inactive</span>
                         </div>
                       )
                     ) : (
-                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 backdrop-blur-md shadow-sm">
+                      <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 rounded-bl-xl border-b border-l border-emerald-500/35 bg-emerald-500/15 px-3 py-1 font-mono text-[11px] font-semibold text-emerald-400 shadow-sm">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
                         <span>Active · Serving Tokens</span>
                       </div>
@@ -2211,7 +2242,7 @@ export function ProvidersModelsView({
                   return (
                     <tr
                       key={fullSpec}
-                      className={`group hover:bg-[var(--bg-elevated)]/40 transition-colors ${
+                      className={`cv-row group hover:bg-[var(--bg-elevated)]/40 transition-colors ${
                         isLockedForUser ? "opacity-45 grayscale" : ""
                       }`}
                     >
@@ -2308,7 +2339,7 @@ export function ProvidersModelsView({
                 return (
                   <div
                     key={fullSpec}
-                    className={`group relative overflow-hidden flex flex-col justify-between gap-1.5 rounded-xl p-2.5 sm:p-3 transition-[border-color,background-color,box-shadow] duration-150 ${cardAccents} ${
+                    className={`cv-card group relative overflow-hidden flex flex-col justify-between gap-1.5 rounded-xl p-2.5 sm:p-3 transition-[border-color,background-color,box-shadow] duration-150 ${cardAccents} ${
                       isLockedForUser
                         ? "opacity-45 grayscale"
                         : ""
@@ -2622,4 +2653,4 @@ export function ProvidersModelsView({
       {customProviderModal}
     </div>
   );
-}
+});

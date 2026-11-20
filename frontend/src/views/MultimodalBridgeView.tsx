@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Check,
@@ -25,14 +25,20 @@ import type {
 import { getModelCapabilities } from "../utils/modelCapabilities";
 
 interface MultimodalBridgeViewProps {
+  models?: OpenAiModelEntry[];
   onNotify?: (msg: string, isError?: boolean) => void;
 }
 
-export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
-  const [models, setModels] = useState<OpenAiModelEntry[]>([]);
+export const MultimodalBridgeView = memo(function MultimodalBridgeView({
+  models: propModels,
+  onNotify,
+}: MultimodalBridgeViewProps) {
+  const [fetchedModels, setFetchedModels] = useState<OpenAiModelEntry[]>([]);
+  const models = propModels && propModels.length > 0 ? propModels : fetchedModels;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const statsSigRef = useRef("");
 
   // Live Bridge telemetry stats
   const [stats, setStats] = useState<BridgeStats>({
@@ -62,20 +68,23 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
     finalPayload: string;
   } | null>(null);
 
+  const hasPropModels = Boolean(propModels && propModels.length > 0);
   useEffect(() => {
-    void loadData();
+    void loadData(!hasPropModels);
     const interval = setInterval(() => {
-      void loadStatsOnly();
+      if (!document.hidden) {
+        void loadStatsOnly();
+      }
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [hasPropModels]);
 
-  async function loadData() {
+  async function loadData(fetchModels = true) {
     setLoading(true);
     try {
       const [bridgeRes, modelsRes, statsRes] = await Promise.all([
         api.getBridgeConfig(),
-        api.getModels().catch(() => []),
+        fetchModels ? api.getModels().catch(() => []) : Promise.resolve<OpenAiModelEntry[]>([]),
         api.getBridgeStats().catch(() => ({ stats: { total_transcriptions: 0, images_transcribed: 0, audio_transcribed: 0, last_event: null } })),
       ]);
 
@@ -89,7 +98,10 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
       setAudioModel(cfg.audio_model || "");
       setAudioPrompt(cfg.audio_prompt || "");
 
-      setModels(modelsRes);
+      if (fetchModels) {
+        setFetchedModels(modelsRes);
+      }
+      statsSigRef.current = JSON.stringify(statsRes.stats);
       setStats(statsRes.stats);
     } catch (err) {
       onNotify?.(err instanceof Error ? err.message : "Failed to load bridge configuration", true);
@@ -102,7 +114,11 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
     try {
       const res = await api.getBridgeStats();
       if (res.stats) {
-        setStats(res.stats);
+        const nextSig = JSON.stringify(res.stats);
+        if (nextSig !== statsSigRef.current) {
+          statsSigRef.current = nextSig;
+          setStats(res.stats);
+        }
       }
     } catch {
       // Background poll silently ignore
@@ -357,7 +373,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 onChange={(e) => setVisionEnabled(e.target.checked)}
                 className="sr-only peer"
               />
-              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500 peer-checked:border-sky-500"></div>
+              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full transition-colors peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:bg-sky-500 peer-checked:border-sky-500"></div>
             </label>
           }
         >
@@ -390,7 +406,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 <button
                   type="button"
                   onClick={() => setVisionMode("standard")}
-                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-all ${
+                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-colors ${
                     visionMode === "standard"
                       ? "border-sky-500 bg-sky-500/10 shadow-xs"
                       : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
@@ -408,7 +424,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 <button
                   type="button"
                   onClick={() => setVisionMode("code_ocr")}
-                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-all ${
+                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-colors ${
                     visionMode === "code_ocr"
                       ? "border-amber-500 bg-amber-500/10 shadow-xs"
                       : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
@@ -426,7 +442,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 <button
                   type="button"
                   onClick={() => setVisionMode("minimal")}
-                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-all ${
+                  className={`flex flex-col items-start gap-1 rounded-xl border p-2.5 text-left transition-colors ${
                     visionMode === "minimal"
                       ? "border-emerald-500 bg-emerald-500/10 shadow-xs"
                       : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
@@ -470,7 +486,7 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
                 onChange={(e) => setAudioEnabled(e.target.checked)}
                 className="sr-only peer"
               />
-              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500 peer-checked:border-purple-500"></div>
+              <div className="w-9 h-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] peer-focus:outline-none rounded-full transition-colors peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:bg-purple-500 peer-checked:border-purple-500"></div>
             </label>
           }
         >
@@ -596,4 +612,4 @@ export function MultimodalBridgeView({ onNotify }: MultimodalBridgeViewProps) {
       </Card>
     </div>
   );
-}
+});

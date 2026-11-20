@@ -5,11 +5,14 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::header::CONTENT_TYPE;
+use axum::extract::Path as AxumPath;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderValue, Method, Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde_json::json;
 use tesie_admin::{admin_router, AdminState, AuthAttemptLimiter};
 use tesie_gateway::{gateway_router, GatewayState};
@@ -57,7 +60,7 @@ pub fn build_app_router(
         fetch_live_models: opts.fetch_live_models,
     };
     let adm_state = AdminState {
-        store,
+        store: store.clone(),
         mihomo,
         engine: engine.clone(),
         catalog,
@@ -68,8 +71,16 @@ pub fn build_app_router(
         auth_limiter: Arc::new(AuthAttemptLimiter::default()),
     };
 
+    let icon_store = store;
     let mut router = Router::new()
         .route("/healthz", get(|| async { Json(json!({ "status": "ok" })) }))
+        .route(
+            "/api/custom-providers/{id}/icon",
+            get(move |AxumPath(id): AxumPath<String>| {
+                let st = icon_store.clone();
+                async move { serve_custom_provider_icon(st, id).await }
+            }),
+        )
         .merge(gateway_router(gw_state))
         .nest("/api/admin", admin_router(adm_state));
 
@@ -129,6 +140,13 @@ async fn serve_spa_asset(root: &Path, method: &Method, uri: &Uri) -> Response {
     match tokio::fs::read(&candidate).await {
         Ok(bytes) => {
             let mime = content_type_for_path(&candidate);
+            let cache_ctl = if raw_path.starts_with("/assets/") {
+                "public, max-age=31536000, immutable"
+            } else if raw_path.starts_with("/providers/") || raw_path == "/favicon.svg" {
+                "public, max-age=3600"
+            } else {
+                "no-cache"
+            };
             let is_head = method == Method::HEAD;
             let body = if is_head {
                 Body::empty()
@@ -139,10 +157,50 @@ async fn serve_spa_asset(root: &Path, method: &Method, uri: &Uri) -> Response {
             *resp.status_mut() = StatusCode::OK;
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+            resp.headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static(cache_ctl));
             resp
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+async fn serve_custom_provider_icon(store: Store, id: String) -> Response {
+    let Ok(Some(cp)) = store.custom_providers().get(&id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(raw) = cp.favicon_url.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(rest) = raw.strip_prefix("data:") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some((meta, b64)) = rest.split_once(";base64,") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    let content_type = if mime.is_empty() {
+        "image/png"
+    } else if mime.starts_with("image/") {
+        mime
+    } else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let Ok(bytes) = STANDARD.decode(b64.trim()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mut resp = Response::new(Body::from(bytes));
+    *resp.status_mut() = StatusCode::OK;
+    if let Ok(hv) = HeaderValue::from_str(content_type) {
+        resp.headers_mut().insert(CONTENT_TYPE, hv);
+    }
+    resp.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=86400, immutable"),
+    );
+    resp
 }
 
 fn content_type_for_path(path: &Path) -> &'static str {

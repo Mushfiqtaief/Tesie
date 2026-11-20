@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   Check,
   ChevronRight,
@@ -100,13 +101,15 @@ const SAMPLE_TEST_SUITE =
   Array.from({ length: 50 }, (_, i) => `test integration::case_${i}_passes ... ok`).join("\n") +
   `\ntest result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`;
 
-export function TokenSaverView({
-  nowMs,
+export const TokenSaverView = memo(function TokenSaverView({
+  nowMs: nowMsProp,
   onNotify,
 }: {
-  nowMs: number;
+  nowMs?: number;
   onNotify: (msg: string, isErr?: boolean) => void;
 }) {
+  const internalNowMs = useLiveClock(10_000, nowMsProp === undefined);
+  const nowMs = nowMsProp ?? internalNowMs;
   const [config, setConfig] = useState<TokenSaverConfig>(DEFAULT_CFG);
   const [stats, setStats] = useState<TokenSaverStats>(DEFAULT_STATS);
   const [loading, setLoading] = useState(true);
@@ -679,4 +682,4 @@ export function TokenSaverView({
       )}
     </div>
   );
-}
+});

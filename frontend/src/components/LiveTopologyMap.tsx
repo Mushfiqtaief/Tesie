@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Blocks,
@@ -32,7 +32,7 @@ const CLIENT_INGRESS_X = -195;
 const CORE_HUB_X = 0;
 const PROVIDER_COL_X = 195;
 
-export function LiveTopologyMap({
+export const LiveTopologyMap = memo(function LiveTopologyMap({
   topology,
   onSelectProvider,
 }: {
@@ -40,12 +40,14 @@ export function LiveTopologyMap({
   onSelectProvider: (providerId: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasLayerRef = useRef<HTMLDivElement | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 820, height: 390 });
   const [hoveredItem, setHoveredItem] = useState<HoveredTopologyItem | null>(null);
 
   // Interactive pan & zoom state for Flow Topology canvas
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const livePanRef = useRef({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragOriginRef = useRef({ x: 0, y: 0 });
 
@@ -156,6 +158,7 @@ export function LiveTopologyMap({
       (height - 48) / flowLayout.logicalH,
     );
     setZoom(Math.min(1.18, Math.max(0.55, s)));
+    livePanRef.current = { x: 0, y: 0 };
     setPan({ x: 0, y: 0 });
   }, [containerSize, flowLayout.logicalH, flowLayout.logicalW]);
 
@@ -182,21 +185,25 @@ export function LiveTopologyMap({
     if ((e.target as HTMLElement).closest("button,[data-node-clickable='true']")) return;
     setHoveredItem(null);
     setDragging(true);
-    dragOriginRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    const curPan = livePanRef.current;
+    dragOriginRef.current = { x: e.clientX - curPan.x, y: e.clientY - curPan.y };
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragging) return;
-    setPan({
-      x: e.clientX - dragOriginRef.current.x,
-      y: e.clientY - dragOriginRef.current.y,
-    });
+    const nx = e.clientX - dragOriginRef.current.x;
+    const ny = e.clientY - dragOriginRef.current.y;
+    livePanRef.current = { x: nx, y: ny };
+    if (canvasLayerRef.current) {
+      canvasLayerRef.current.style.transform = `translate3d(${containerSize.width / 2 + nx}px, ${containerSize.height / 2 + ny}px, 0) scale(${zoom})`;
+    }
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
     if (dragging) {
       setDragging(false);
+      setPan(livePanRef.current);
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {
@@ -282,9 +289,10 @@ export function LiveTopologyMap({
         }`}
       >
           <div
+            ref={canvasLayerRef}
             className="pointer-events-none absolute inset-0"
             style={{
-              transform: `translate(${containerSize.width / 2 + pan.x}px, ${containerSize.height / 2 + pan.y}px) scale(${zoom})`,
+              transform: `translate3d(${containerSize.width / 2 + pan.x}px, ${containerSize.height / 2 + pan.y}px, 0) scale(${zoom})`,
               transformOrigin: "0 0",
             }}
           >
@@ -457,7 +465,7 @@ export function LiveTopologyMap({
                   top: bridgeConnection.badgeY,
                   transform: "translate(0, -50%)",
                 }}
-                className="pointer-events-none absolute z-20 flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-[var(--bg-canvas)]/90 px-3 py-1 font-mono text-[11px] font-semibold text-sky-300 shadow-lg backdrop-blur-md animate-pulse"
+                className="pointer-events-none absolute z-20 flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-[var(--bg-canvas)]/95 px-3 py-1 font-mono text-[11px] font-semibold text-sky-300 shadow-lg animate-pulse"
               >
                 <Eye className="h-3.5 w-3.5 text-sky-400" />
                 <span>
@@ -612,7 +620,7 @@ export function LiveTopologyMap({
                 left: hoverPopoverPosition.left,
                 top: hoverPopoverPosition.top,
               }}
-              className="pointer-events-none absolute z-30 w-[284px] rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)]/96 p-3.5 shadow-xl backdrop-blur-md"
+              className="pointer-events-none absolute z-30 w-[284px] rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)]/98 p-3.5 shadow-xl"
             >
               {hoveredItem.kind === "ingress" && (
                 <div className="space-y-2.5">
@@ -788,7 +796,7 @@ export function LiveTopologyMap({
 
           {/* Bottom-left Zoom Controls + Readout */}
           <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2">
-            <div className="flex overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/92 shadow-sm backdrop-blur-sm">
+            <div className="flex overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 shadow-sm">
               <button
                 type="button"
                 onClick={() => setZoom((z) => Math.min(2.0, z * 1.16))}
@@ -823,7 +831,7 @@ export function LiveTopologyMap({
           </div>
 
           {/* Bottom-right Subtle Interaction Hint + Legend */}
-          <div className="pointer-events-none absolute right-3 bottom-3 z-20 hidden items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 px-3 py-1.5 text-[11px] text-[var(--text-muted)] backdrop-blur-sm sm:flex">
+          <div className="pointer-events-none absolute right-3 bottom-3 z-20 hidden items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-3 py-1.5 text-[11px] text-[var(--text-muted)] sm:flex">
             <span>Hover icon for details</span>
             <span className="text-[var(--border-strong)]">&middot;</span>
             <span className="inline-flex items-center gap-1.5">
@@ -869,4 +877,4 @@ export function LiveTopologyMap({
       )}
     </Card>
   );
-}
+});

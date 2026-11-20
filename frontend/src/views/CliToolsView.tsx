@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   Check,
   Code2,
@@ -34,7 +34,7 @@ import type {
 
 type ToolTab = "opencode" | "claude" | "codex" | "ides";
 
-export function CliToolsView({
+export const CliToolsView = memo(function CliToolsView({
   cliStatus,
   models,
   combos,
@@ -335,7 +335,7 @@ default_subagent_model = "${sub}"`;
         <button
           type="button"
           onClick={() => setActiveTab("opencode")}
-          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-colors ${
             activeTab === "opencode"
               ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
               : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
@@ -364,7 +364,7 @@ default_subagent_model = "${sub}"`;
         <button
           type="button"
           onClick={() => setActiveTab("claude")}
-          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-colors ${
             activeTab === "claude"
               ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
               : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
@@ -393,7 +393,7 @@ default_subagent_model = "${sub}"`;
         <button
           type="button"
           onClick={() => setActiveTab("codex")}
-          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-colors ${
             activeTab === "codex"
               ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
               : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
@@ -422,7 +422,7 @@ default_subagent_model = "${sub}"`;
         <button
           type="button"
           onClick={() => setActiveTab("ides")}
-          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+          className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition-colors ${
             activeTab === "ides"
               ? "border-[var(--accent)] bg-[var(--bg-surface)] shadow-md ring-1 ring-[var(--accent)]/30"
               : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/70 hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]"
@@ -1161,4 +1161,4 @@ default_subagent_model = "${sub}"`;
       </Modal>
     </div>
   );
-}
+});

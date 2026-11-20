@@ -299,6 +299,16 @@
   transition-timing-function: var(--ease-out);
 }
 
+.cv-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
+.cv-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 112px;
+}
+
 /* Topology active stream stroke & quiet router hub ring */
 @keyframes tr-dash-flow {
   to {

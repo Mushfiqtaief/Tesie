@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 import type { UsageTimeBucket } from "../types";
 import { formatCompactNumber, formatTps } from "../utils/format";
 import { Card, SegmentedControl } from "./UiPrimitives";
@@ -113,7 +113,7 @@ function buildMonotoneAreaPath(points: Point2D[], topY: number, baselineY: numbe
   return `${line} L ${lastX} ${baselineY.toFixed(1)} L ${firstX} ${baselineY.toFixed(1)} Z`;
 }
 
-export function UsageAreaChart({ buckets }: { buckets: UsageTimeBucket[] }) {
+export const UsageAreaChart = memo(function UsageAreaChart({ buckets }: { buckets: UsageTimeBucket[] }) {
   const uid = useId().replace(/:/g, "");
   const [mode, setMode] = useState<ChartMode>("tokens");
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -712,7 +712,7 @@ export function UsageAreaChart({ buckets }: { buckets: UsageTimeBucket[] }) {
                     ? `clamp(16px, ${(100 - (xFor(hoverIdx) / w) * 100 + 2).toFixed(1)}%, calc(100% - 220px))`
                     : undefined,
                 }}
-                className="pointer-events-none absolute top-3 z-10 w-48 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface)]/95 px-3 py-2 text-[11px] shadow-md backdrop-blur-sm tabular-nums"
+                className="pointer-events-none absolute top-3 z-10 w-48 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface)]/98 px-3 py-2 text-[11px] shadow-md tabular-nums"
               >
                 <div className="mb-1.5 flex items-center justify-between border-b border-[var(--border-subtle)] pb-1">
                   <span className="font-mono font-semibold text-[var(--text-primary)]">
@@ -760,4 +760,4 @@ export function UsageAreaChart({ buckets }: { buckets: UsageTimeBucket[] }) {
       )}
     </Card>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -32,7 +32,13 @@ interface ChatMessageItem {
   error?: string;
 }
 
-export function PlaygroundView({
+function formatModelSpec(m: OpenAiModelEntry) {
+  if (m.id.includes("/") || m.owned_by === "combo") return m.id;
+  if (m.owned_by === "antigravity") return `ag/${m.id}`;
+  return `oc/${m.id}`;
+}
+
+export const PlaygroundView = memo(function PlaygroundView({
   models,
   keys = [],
   initialModel,
@@ -56,6 +62,30 @@ export function PlaygroundView({
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const abortRef = useRef<AbortController | null>(null);
   const scrollEndRef = useRef<HTMLDivElement | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const pendingProgressRef = useRef<{
+    asstId: string;
+    content: string;
+    reasoning?: string;
+    proxyUsed?: string | null;
+    egressIp?: string | null;
+    resolvedModel?: string | null;
+    comboUsed?: string | null;
+    ttftMs?: number | null;
+    elapsedMs: number;
+    liveTps?: number | null;
+    approxTokens?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingProgressRef.current = null;
+    };
+  }, []);
 
   const defaultEnabledKey = keys.find((k) => k.enabled && k.raw_key)?.raw_key ?? "";
   const anyEnabledKeyExists = keys.some((k) => k.enabled);
@@ -119,27 +149,54 @@ export function PlaygroundView({
         apiKey: apiKey.trim() || defaultEnabledKey || undefined,
         signal: ctrl.signal,
         onProgress: (p) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === asstId
-                ? {
-                    ...m,
-                    content: p.content,
-                    reasoning: p.reasoning,
-                    proxyUsed: p.proxyUsed,
-                    egressIp: p.egressIp,
-                    resolvedModel: p.resolvedModel,
-                    comboUsed: p.comboUsed,
-                    ttftMs: p.ttftMs,
-                    latencyMs: p.elapsedMs,
-                    tokensPerSec: p.liveTps,
-                    completionTokens: p.approxTokens,
-                  }
-                : m,
-            ),
-          );
+          pendingProgressRef.current = {
+            asstId,
+            content: p.content,
+            reasoning: p.reasoning,
+            proxyUsed: p.proxyUsed,
+            egressIp: p.egressIp,
+            resolvedModel: p.resolvedModel,
+            comboUsed: p.comboUsed,
+            ttftMs: p.ttftMs,
+            elapsedMs: p.elapsedMs,
+            liveTps: p.liveTps,
+            approxTokens: p.approxTokens,
+          };
+          if (rafIdRef.current === null) {
+            rafIdRef.current = window.requestAnimationFrame(() => {
+              rafIdRef.current = null;
+              const snap = pendingProgressRef.current;
+              if (!snap) return;
+              pendingProgressRef.current = null;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === snap.asstId
+                    ? {
+                        ...m,
+                        content: snap.content,
+                        reasoning: snap.reasoning,
+                        proxyUsed: snap.proxyUsed,
+                        egressIp: snap.egressIp,
+                        resolvedModel: snap.resolvedModel,
+                        comboUsed: snap.comboUsed,
+                        ttftMs: snap.ttftMs,
+                        latencyMs: snap.elapsedMs,
+                        tokensPerSec: snap.liveTps,
+                        completionTokens: snap.approxTokens,
+                      }
+                    : m,
+                ),
+              );
+            });
+          }
         },
       });
+
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingProgressRef.current = null;
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -165,6 +222,11 @@ export function PlaygroundView({
       );
       onCompleted();
     } catch (err) {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingProgressRef.current = null;
       const msg = err instanceof Error ? err.message : "Request failed";
       setMessages((prev) =>
         prev.map((m) =>
@@ -183,13 +245,11 @@ export function PlaygroundView({
     }
   }
 
-  const formatModelSpec = (m: OpenAiModelEntry) => {
-    if (m.id.includes("/") || m.owned_by === "combo") return m.id;
-    if (m.owned_by === "antigravity") return `ag/${m.id}`;
-    return `oc/${m.id}`;
-  };
-
-  const quickModels = models.slice(0, 5).map(formatModelSpec);
+  const modelSpecs = useMemo(
+    () => models.map((m) => ({ id: m.id, spec: formatModelSpec(m) })),
+    [models],
+  );
+  const quickModels = useMemo(() => modelSpecs.slice(0, 5).map((m) => m.spec), [modelSpecs]);
 
   return (
     <div className="space-y-4">
@@ -207,10 +267,9 @@ export function PlaygroundView({
                   className={`${INPUT_CLASS} py-1 font-mono`}
                 />
                 <datalist id="tesie-models-list">
-                  {models.map((m) => {
-                    const val = formatModelSpec(m);
-                    return <option key={m.id} value={val} />;
-                  })}
+                  {modelSpecs.map((item) => (
+                    <option key={item.id} value={item.spec} />
+                  ))}
                 </datalist>
               </div>
 
@@ -443,4 +502,4 @@ export function PlaygroundView({
       </Card>
     </div>
   );
-}
+});

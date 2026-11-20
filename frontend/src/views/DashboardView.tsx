@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
+import { useLiveClock } from "../hooks/useLiveClock";
 import {
   Activity,
   ArrowDown,
@@ -53,13 +54,13 @@ interface PivotRow {
   lastUsed: number | null;
 }
 
-export function DashboardView({
+export const DashboardView = memo(function DashboardView({
   period,
   onChangePeriod,
   usage,
   topology,
   loading,
-  nowMs,
+  nowMs: nowMsProp,
   onInspectProviderQuota,
   onOpenAllLogs,
 }: {
@@ -68,50 +69,49 @@ export function DashboardView({
   usage: UsageSummary | null;
   topology: TopologyResponse | null;
   loading: boolean;
-  nowMs: number;
+  nowMs?: number;
   onInspectProviderQuota: (providerId: string) => void;
   onOpenAllLogs: () => void;
 }) {
+  const internalNowMs = useLiveClock(10_000, nowMsProp === undefined);
+  const nowMs = nowMsProp ?? internalNowMs;
+
   const [pivot, setPivot] = useState<PivotTab>("model");
   const [sortField, setSortField] = useState<SortField>("requests");
   const [sortAsc, setSortAsc] = useState(false);
   const [selectedLog, setSelectedLog] = useState<UsageLogRecord | null>(null);
 
-  if (!usage && loading) {
-    return <DashboardSkeleton />;
-  }
-
-  const totalRequests = usage?.total_requests ?? 0;
-  const successRequests = usage?.success_requests ?? 0;
-  const rateLimited = usage?.rate_limited_requests ?? 0;
-  const promptTokens = usage?.prompt_tokens ?? 0;
-  const cachedTokens = usage?.cached_tokens ?? 0;
-  const completionTokens = usage?.completion_tokens ?? 0;
-  const grossInputTokens = promptTokens + cachedTokens;
-
-  const providerMetaById = new Map(
-    (topology?.providers ?? []).map((p) => [p.id.toLowerCase(), p]),
+  const providerMetaById = useMemo(
+    () => new Map((topology?.providers ?? []).map((p) => [p.id.toLowerCase(), p])),
+    [topology?.providers],
   );
 
-  function resolveProviderMeta(providerId: string, modelSpec?: string) {
-    const rawId = (providerId || "").trim();
-    const lower = rawId.toLowerCase();
-    const fromTopology = providerMetaById.get(lower);
-    const isCombo = lower === "combo" && !fromTopology;
-    const name = fromTopology?.name || providerDisplayName(rawId || "opencode");
-    const logo =
-      fromTopology?.logo ||
-      (lower.startsWith("cp-")
-        ? undefined
-        : getProviderLogo(rawId || modelSpec || "opencode"));
-    const color = fromTopology?.color;
-    return { name, logo, color, isCombo };
-  }
+  const resolveProviderMeta = useCallback(
+    (providerId: string, modelSpec?: string) => {
+      const rawId = (providerId || "").trim();
+      const lower = rawId.toLowerCase();
+      const fromTopology = providerMetaById.get(lower);
+      const isCombo = lower === "combo" && !fromTopology;
+      const name = fromTopology?.name || providerDisplayName(rawId || "opencode");
+      const logo =
+        fromTopology?.logo ||
+        (lower.startsWith("cp-")
+          ? undefined
+          : getProviderLogo(rawId || modelSpec || "opencode"));
+      const color = fromTopology?.color;
+      return { name, logo, color, isCombo };
+    },
+    [providerMetaById],
+  );
 
   // Enforce 2xx-only in Dashboard `Recent requests` (never show failed/429 requests here)
-  const succeededRecent = (usage?.recent ?? [])
-    .filter((r) => r.status_code >= 200 && r.status_code < 300)
-    .slice(0, 40);
+  const succeededRecent = useMemo(
+    () =>
+      (usage?.recent ?? [])
+        .filter((r) => r.status_code >= 200 && r.status_code < 300)
+        .slice(0, 40),
+    [usage?.recent],
+  );
 
   function toggleSort(field: SortField) {
     if (sortField === field) {
@@ -122,7 +122,7 @@ export function DashboardView({
     }
   }
 
-  const rawRows: PivotRow[] = (() => {
+  const rawRows: PivotRow[] = useMemo(() => {
     if (!usage) return [];
     switch (pivot) {
       case "model":
@@ -178,36 +178,52 @@ export function DashboardView({
           lastUsed: px.last_used_at,
         }));
     }
-  })();
+  }, [pivot, resolveProviderMeta, usage]);
 
-  const sortedRows = [...rawRows].sort((a, b) => {
-    const dir = sortAsc ? 1 : -1;
-    switch (sortField) {
-      case "name":
-        return a.name.localeCompare(b.name) * dir;
-      case "requests":
-        return (a.requests - b.requests) * dir;
-      case "prompt":
-        return (a.prompt - b.prompt) * dir;
-      case "cached":
-        return (a.cached - b.cached) * dir;
-      case "completion":
-        return (a.completion - b.completion) * dir;
-      case "speed":
-        return (a.speed - b.speed) * dir;
-      case "lastUsed":
-        return ((a.lastUsed ?? 0) - (b.lastUsed ?? 0)) * dir;
-    }
-  });
+  const sortedRows = useMemo(
+    () =>
+      [...rawRows].sort((a, b) => {
+        const dir = sortAsc ? 1 : -1;
+        switch (sortField) {
+          case "name":
+            return a.name.localeCompare(b.name) * dir;
+          case "requests":
+            return (a.requests - b.requests) * dir;
+          case "prompt":
+            return (a.prompt - b.prompt) * dir;
+          case "cached":
+            return (a.cached - b.cached) * dir;
+          case "completion":
+            return (a.completion - b.completion) * dir;
+          case "speed":
+            return (a.speed - b.speed) * dir;
+          case "lastUsed":
+            return ((a.lastUsed ?? 0) - (b.lastUsed ?? 0)) * dir;
+        }
+      }),
+    [rawRows, sortAsc, sortField],
+  );
 
-  const maxProviderTokens = Math.max(
-    1,
-    ...(usage?.by_provider.map((p) => p.total_tokens) ?? [0]),
+  const maxProviderTokens = useMemo(
+    () => Math.max(1, ...(usage?.by_provider.map((p) => p.total_tokens) ?? [0])),
+    [usage?.by_provider],
   );
-  const maxModelTokens = Math.max(
-    1,
-    ...(usage?.by_model.map((m) => m.total_tokens) ?? [0]),
+  const maxModelTokens = useMemo(
+    () => Math.max(1, ...(usage?.by_model.map((m) => m.total_tokens) ?? [0])),
+    [usage?.by_model],
   );
+
+  if (!usage && loading) {
+    return <DashboardSkeleton />;
+  }
+
+  const totalRequests = usage?.total_requests ?? 0;
+  const successRequests = usage?.success_requests ?? 0;
+  const rateLimited = usage?.rate_limited_requests ?? 0;
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const cachedTokens = usage?.cached_tokens ?? 0;
+  const completionTokens = usage?.completion_tokens ?? 0;
+  const grossInputTokens = promptTokens + cachedTokens;
 
   function renderSortIcon(field: SortField) {
     if (sortField !== field) return null;
@@ -345,7 +361,7 @@ export function DashboardView({
               <div className="relative max-h-[420px] min-h-[320px] flex-1 lg:max-h-none lg:min-h-0">
                 <div className="smooth-scroll h-full overflow-y-auto overflow-x-hidden lg:absolute lg:inset-0">
                   <table className="w-full table-fixed border-collapse text-xs">
-                    <thead className="sticky top-0 z-10 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 text-[11px] font-medium text-[var(--text-muted)] backdrop-blur-sm">
+                    <thead className="sticky top-0 z-10 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[11px] font-medium text-[var(--text-muted)]">
                       <tr>
                         <th className="py-2.5 pl-4 pr-2 text-left">Route &amp; Model</th>
                         <th className="w-[96px] py-2.5 px-2 text-right whitespace-nowrap">In / Out</th>
@@ -669,4 +685,4 @@ export function DashboardView({
       </SlideOverDrawer>
     </div>
   );
-}
+});

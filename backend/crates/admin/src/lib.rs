@@ -1379,30 +1379,86 @@ async fn get_usage(
     Ok(Json(json!(summary)))
 }
 
+fn public_favicon_url_for_cp(cp: &CustomProvider) -> Option<String> {
+    match cp.favicon_url.as_deref() {
+        Some(raw) if raw.starts_with("data:") => {
+            Some(format!("/api/custom-providers/{}/icon?v={}", cp.id, cp.updated_at))
+        }
+        other => other.map(str::to_string),
+    }
+}
+
 async fn get_topology(
     State(state): State<AdminState>,
 ) -> std::result::Result<Json<Value>, Response> {
-    let mihomo_health = state.mihomo.health().await.ok();
-    let mihomo_states = state.mihomo.fetch_proxy_states().await.ok();
-    let proxies = state.store.proxies().list_proxies().await.map_err(err_resp)?;
-    let oc_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("opencode")
-        .await
-        .map_err(err_resp)?;
-    let quotas = state
-        .store
-        .quotas()
-        .list_ip_quotas_for_config(&oc_cfg)
-        .await
-        .map_err(err_resp)?;
-    let usage = state
-        .store
-        .usage()
-        .summarize_usage_for_period("24h", 15)
-        .await
-        .map_err(err_resp)?;
+    let now_ts = tesie_store::now_ms();
+    let (
+        mihomo_health_res,
+        mihomo_states_res,
+        proxies_res,
+        oc_cfg_res,
+        ag_cfg_res,
+        ovh_cfg_res,
+        usage_res,
+        ag_accounts_res,
+        combos_res,
+        custom_providers_res,
+    ) = tokio::join!(
+        state.mihomo.health(),
+        state.mihomo.fetch_proxy_states(),
+        async { state.store.proxies().list_proxies().await },
+        async { state.store.provider_configs().get_or_default("opencode").await },
+        async { state.store.provider_configs().get_or_default("antigravity").await },
+        async { state.store.provider_configs().get_or_default("ovh").await },
+        async { state.store.usage().summarize_usage_for_period("24h", 15).await },
+        state.engine.antigravity().list_accounts_with_partitions(),
+        async { state.store.combos().list_combos().await },
+        async { state.store.custom_providers().list().await },
+    );
+
+    let mihomo_health = mihomo_health_res.ok();
+    let mihomo_states = mihomo_states_res.ok();
+    let proxies = proxies_res.map_err(err_resp)?;
+    let oc_cfg = oc_cfg_res.map_err(err_resp)?;
+    let ag_cfg = ag_cfg_res.map_err(err_resp)?;
+    let ovh_cfg = ovh_cfg_res.unwrap_or_else(|_| tesie_core::ProviderConfig {
+        provider_id: "ovh".into(),
+        enabled: true,
+        proxy_mode: "all".into(),
+        selected_proxy_ids: Vec::new(),
+        window_duration_ms: 60_000,
+        max_requests_per_window: Some(2),
+        max_tokens_per_window: None,
+        session_ttl_ms: 14_400_000,
+        thinking_level: "auto".into(),
+        probe_enabled: false,
+        probe_interval_sec: 60,
+        routing_strategy: "round-robin".into(),
+        updated_at: now_ts,
+    });
+    let usage = usage_res.map_err(err_resp)?;
+    let ag_accounts = ag_accounts_res.unwrap_or_default();
+    let combos = combos_res.unwrap_or_default();
+    let custom_providers = custom_providers_res.unwrap_or_default();
+
+    let (quotas_res, ovh_cands_res) = tokio::join!(
+        async { state.store.quotas().list_ip_quotas_for_config(&oc_cfg).await },
+        async {
+            state
+                .store
+                .quotas()
+                .select_healthy_ovh_candidates(now_ts, &ovh_cfg, |p| {
+                    mihomo_states
+                        .as_ref()
+                        .and_then(|m| m.get(&p.name))
+                        .map(|s| s.alive)
+                        .unwrap_or(p.alive)
+                })
+                .await
+        },
+    );
+    let quotas = quotas_res.map_err(err_resp)?;
+    let ovh_cands = ovh_cands_res.unwrap_or_default();
 
     let active_ips = quotas
         .iter()
@@ -1441,19 +1497,6 @@ async fn get_topology(
         .iter()
         .find(|p| p.provider_id == "antigravity");
 
-    let ag_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("antigravity")
-        .await
-        .map_err(err_resp)?;
-
-    let ag_accounts = state
-        .engine
-        .antigravity()
-        .list_accounts_with_partitions()
-        .await
-        .unwrap_or_default();
     let ag_ready_accounts = ag_accounts
         .iter()
         .filter(|a| a.enabled && a.status == "ready")
@@ -1462,12 +1505,6 @@ async fn get_topology(
         .iter()
         .filter(|a| a.enabled && a.status == "cooldown")
         .count();
-    let combos = state
-        .store
-        .combos()
-        .list_combos()
-        .await
-        .unwrap_or_default();
 
     let mut providers = vec![
         json!({
@@ -1502,40 +1539,7 @@ async fn get_topology(
         }),
     ];
 
-    let ovh_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("ovh")
-        .await
-        .unwrap_or_else(|_| tesie_core::ProviderConfig {
-            provider_id: "ovh".into(),
-            enabled: true,
-            proxy_mode: "all".into(),
-            selected_proxy_ids: Vec::new(),
-            window_duration_ms: 60_000,
-            max_requests_per_window: Some(2),
-            max_tokens_per_window: None,
-            session_ttl_ms: 14_400_000,
-            thinking_level: "auto".into(),
-            probe_enabled: false,
-            probe_interval_sec: 60,
-            routing_strategy: "round-robin".into(),
-            updated_at: tesie_store::now_ms(),
-        });
     let ovh_usage = usage.by_provider.iter().find(|p| p.provider_id == "ovh");
-    let now_ts = tesie_store::now_ms();
-    let ovh_cands = state
-        .store
-        .quotas()
-        .select_healthy_ovh_candidates(now_ts, &ovh_cfg, |p| {
-            mihomo_states
-                .as_ref()
-                .and_then(|m| m.get(&p.name))
-                .map(|s| s.alive)
-                .unwrap_or(p.alive)
-        })
-        .await
-        .unwrap_or_default();
     let ovh_active = ovh_cands.len();
     let ovh_total = proxies.len();
     let ovh_cooling = ovh_total.saturating_sub(ovh_active);
@@ -1556,12 +1560,6 @@ async fn get_topology(
         "avg_tokens_per_sec": ovh_usage.map(|x| x.avg_tokens_per_sec).unwrap_or(0.0)
     }));
 
-    let custom_providers = state
-        .store
-        .custom_providers()
-        .list()
-        .await
-        .unwrap_or_default();
     for cp in custom_providers {
         let cp_cfg = state
             .store
@@ -1584,13 +1582,14 @@ async fn get_topology(
                 updated_at: cp.updated_at,
             });
         let cp_usage = usage.by_provider.iter().find(|p| p.provider_id == cp.id);
+        let icon_url = public_favicon_url_for_cp(&cp);
         providers.push(json!({
             "id": cp.id,
             "name": cp.name,
             "prefix": cp.prefix,
             "is_custom": true,
             "color": cp.color,
-            "logo": cp.favicon_url,
+            "logo": icon_url,
             "enabled": cp.enabled && cp_cfg.enabled,
             "quota_strategy": "api_key",
             "selection_strategy": normalize_routing_strategy(&cp_cfg.routing_strategy, "fallback"),
@@ -1815,50 +1814,50 @@ async fn list_providers(
     State(state): State<AdminState>,
 ) -> std::result::Result<Json<Value>, Response> {
     let now = now_ms();
-    let settings = state
-        .store
-        .settings()
-        .get_settings()
-        .await
-        .map_err(err_resp)?;
-    let oc_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("opencode")
-        .await
-        .map_err(err_resp)?;
-    let ag_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("antigravity")
-        .await
-        .map_err(err_resp)?;
+    let (
+        settings_res,
+        oc_cfg_res,
+        ag_cfg_res,
+        ovh_cfg_res,
+        mihomo_states_res,
+        ag_accounts_res,
+        all_models,
+        custom_providers_res,
+    ) = tokio::join!(
+        async { state.store.settings().get_settings().await },
+        async { state.store.provider_configs().get_or_default("opencode").await },
+        async { state.store.provider_configs().get_or_default("antigravity").await },
+        async { state.store.provider_configs().get_or_default("ovh").await },
+        state.mihomo.fetch_proxy_states(),
+        state.engine.antigravity().list_accounts_with_partitions(),
+        state.catalog.list_models(
+            &state.store,
+            Some(&state.mihomo),
+            &state.zen_base_url,
+            state.fetch_live_models,
+        ),
+        async { state.store.custom_providers().list().await },
+    );
 
-    let oc_proxies = state
-        .store
-        .proxies()
-        .list_for_provider_config(&oc_cfg)
-        .await
-        .map_err(err_resp)?;
-    let ag_proxies = state
-        .store
-        .proxies()
-        .list_for_provider_config(&ag_cfg)
-        .await
-        .map_err(err_resp)?;
-    let mihomo_states = state.mihomo.fetch_proxy_states().await.ok();
-    let quotas = state
-        .store
-        .quotas()
-        .list_ip_quotas_for_config(&oc_cfg)
-        .await
-        .map_err(err_resp)?;
-    let ag_accounts = state
-        .engine
-        .antigravity()
-        .list_accounts_with_partitions()
-        .await
-        .unwrap_or_default();
+    let settings = settings_res.map_err(err_resp)?;
+    let oc_cfg = oc_cfg_res.map_err(err_resp)?;
+    let ag_cfg = ag_cfg_res.map_err(err_resp)?;
+    let ovh_cfg = ovh_cfg_res.map_err(err_resp)?;
+    let mihomo_states = mihomo_states_res.ok();
+    let ag_accounts = ag_accounts_res.unwrap_or_default();
+    let custom_providers = custom_providers_res.map_err(err_resp)?;
+
+    let (oc_proxies_res, ag_proxies_res, ovh_proxies_res, quotas_res) = tokio::join!(
+        async { state.store.proxies().list_for_provider_config(&oc_cfg).await },
+        async { state.store.proxies().list_for_provider_config(&ag_cfg).await },
+        async { state.store.proxies().list_for_provider_config(&ovh_cfg).await },
+        async { state.store.quotas().list_ip_quotas_for_config(&oc_cfg).await },
+    );
+
+    let oc_proxies = oc_proxies_res.map_err(err_resp)?;
+    let ag_proxies = ag_proxies_res.map_err(err_resp)?;
+    let ovh_proxies = ovh_proxies_res.map_err(err_resp)?;
+    let quotas = quotas_res.map_err(err_resp)?;
 
     let count_health = |nodes: &[ProxyNode]| -> (usize, usize) {
         let mut h = 0usize;
@@ -1880,16 +1879,6 @@ async fn list_providers(
 
     let (oc_healthy, oc_unhealthy) = count_health(&oc_proxies);
     let (ag_healthy, ag_unhealthy) = count_health(&ag_proxies);
-
-    let all_models = state
-        .catalog
-        .list_models(
-            &state.store,
-            Some(&state.mihomo),
-            &state.zen_base_url,
-            state.fetch_live_models,
-        )
-        .await;
 
     let oc_models: Vec<String> = all_models
         .iter()
@@ -1996,18 +1985,6 @@ async fn list_providers(
         }),
     ];
 
-    let ovh_cfg = state
-        .store
-        .provider_configs()
-        .get_or_default("ovh")
-        .await
-        .map_err(err_resp)?;
-    let ovh_proxies = state
-        .store
-        .proxies()
-        .list_for_provider_config(&ovh_cfg)
-        .await
-        .map_err(err_resp)?;
     let (ovh_healthy, ovh_unhealthy) = count_health(&ovh_proxies);
     let ovh_strategy = normalize_routing_strategy(
         &ovh_cfg.routing_strategy,
@@ -2044,12 +2021,6 @@ async fn list_providers(
         "models": ovh_models
     }));
 
-    let custom_providers = state
-        .store
-        .custom_providers()
-        .list()
-        .await
-        .map_err(err_resp)?;
     for cp in custom_providers {
         let mut cp_cfg = state
             .store
@@ -2078,6 +2049,9 @@ async fn list_providers(
                 }
             })
             .collect();
+        let icon_url = public_favicon_url_for_cp(&cp);
+        let mut cp_summary = cp.clone();
+        cp_summary.favicon_url = icon_url.clone();
         providers.push(json!({
             "id": cp.id,
             "name": cp.name,
@@ -2088,8 +2062,8 @@ async fn list_providers(
             "protocol": cp.protocol,
             "api_type": cp.api_type,
             "base_url": cp.base_url,
-            "logo": cp.favicon_url,
-            "favicon_url": cp.favicon_url,
+            "logo": icon_url,
+            "favicon_url": icon_url,
             "color": cp.color,
             "description": format!(
                 "{} ({} {}) — {} model(s), {} key(s)",
@@ -2111,7 +2085,7 @@ async fn list_providers(
             "active_units": cp.api_keys.len(),
             "cooling_units": 0,
             "total_units": cp.api_keys.len(),
-            "custom_provider": cp,
+            "custom_provider": cp_summary,
             "refreshed_at": now,
             "models": cp_models
         }));
@@ -2686,6 +2660,12 @@ async fn update_custom_provider(
         .await
         .map_err(err_resp)?
         .ok_or_else(|| err_resp(TesRouteError::NotFound(format!("custom provider '{id}' not found"))))?;
+
+    if let Some(Some(ref url)) = input.favicon_url
+        && url.starts_with("/api/custom-providers/")
+    {
+        input.favicon_url = None;
+    }
 
     let base_changed = input
         .base_url

@@ -2054,6 +2054,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "clap",
  "futures",
  "hex",
@@ -2086,6 +2087,7 @@ dependencies = [
  "tesie-providers",
  "tesie-proxy",
  "tesie-store",
+ "tokio",
  "tracing",
  "uuid",
 ]

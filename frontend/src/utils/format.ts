@@ -1,13 +1,21 @@
+const NUMBER_FORMATTER = new Intl.NumberFormat();
+const CLOCK_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour12: false,
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 export function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "0";
-  return new Intl.NumberFormat().format(n);
+  return NUMBER_FORMATTER.format(n);
 }
 
 export function formatCompactNumber(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "0";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
-  return new Intl.NumberFormat().format(n);
+  return NUMBER_FORMATTER.format(n);
 }
 
 export function formatTps(tps: number | null | undefined): string {
@@ -55,12 +63,7 @@ export function formatTimeAgo(tsMs: number | null | undefined, nowMs: number): s
 
 export function formatClockTime(tsMs: number): string {
   try {
-    return new Date(tsMs).toLocaleTimeString([], {
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    return CLOCK_TIME_FORMATTER.format(new Date(tsMs));
   } catch {
     return String(tsMs);
   }
@@ -71,8 +74,14 @@ export function formatPct(part: number, total: number): string {
   return `${((part / total) * 100).toFixed(1)}%`;
 }
 
+const MASK_PROXY_URL_CACHE = new Map<string, string>();
+const MAX_MASK_CACHE_SIZE = 500;
+
 export function maskProxyUrl(url: string | null | undefined): string {
   if (!url) return "Direct interface";
+  const cached = MASK_PROXY_URL_CACHE.get(url);
+  if (cached !== undefined) return cached;
+  let masked: string;
   try {
     const parsed = new URL(url);
     if (parsed.password) {
@@ -81,10 +90,15 @@ export function maskProxyUrl(url: string | null | undefined): string {
     if (parsed.username && parsed.username.length > 6) {
       parsed.username = `${parsed.username.slice(0, 3)}•••`;
     }
-    return parsed.toString().replace(/%E2%80%A2/gi, "•");
+    masked = parsed.toString().replace(/%E2%80%A2/gi, "•");
   } catch {
-    return url.replace(/:([^:@/]+)@/, ":••••@");
+    masked = url.replace(/:([^:@/]+)@/, ":••••@");
   }
+  if (MASK_PROXY_URL_CACHE.size >= MAX_MASK_CACHE_SIZE) {
+    MASK_PROXY_URL_CACHE.clear();
+  }
+  MASK_PROXY_URL_CACHE.set(url, masked);
+  return masked;
 }
 
 /**

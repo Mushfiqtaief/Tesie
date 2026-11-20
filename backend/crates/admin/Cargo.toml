@@ -13,5 +13,6 @@ tesie-core.workspace = true
 tesie-providers.workspace = true
 tesie-proxy.workspace = true
 tesie-store.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true

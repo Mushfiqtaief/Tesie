@@ -1,8 +1,9 @@
+import { memo } from "react";
 import { Eye, Brain, Volume2, Layers } from "lucide-react";
 import type { ModelCapabilities, ModelLimits } from "../utils/modelCapabilities";
 import { formatTokenLimit } from "../utils/modelCapabilities";
 
-export function ModelLimitBadge({
+export const ModelLimitBadge = memo(function ModelLimitBadge({
   limits,
   compact = false,
 }: {
@@ -60,12 +61,12 @@ export function ModelLimitBadge({
       </span>
     </span>
   );
-}
+});
 
 /**
  * Top-right corner icon-only capability stamps with glowing accents & tooltips
  */
-export function ModelCapabilityIcons({
+export const ModelCapabilityIcons = memo(function ModelCapabilityIcons({
   caps,
   className = "",
 }: {
@@ -104,9 +105,9 @@ export function ModelCapabilityIcons({
       )}
     </div>
   );
-}
+});
 
-export function ModelCapabilityBadges({
+export const ModelCapabilityBadges = memo(function ModelCapabilityBadges({
   caps,
   compact = false,
 }: {
@@ -143,7 +144,7 @@ export function ModelCapabilityBadges({
     <div className="flex flex-wrap items-center gap-1 shrink-0">
       {caps.hasVision && (
         <span
-          className="inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-400 border border-sky-500/30 shadow-xs backdrop-blur-xs"
+          className="inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-400 border border-sky-500/30 shadow-xs"
           title="Vision: Supports image, photo, & screenshot analysis"
         >
           <Eye className="h-2.5 w-2.5" />
@@ -152,7 +153,7 @@ export function ModelCapabilityBadges({
       )}
       {caps.hasThinking && (
         <span
-          className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 border border-amber-500/30 shadow-xs backdrop-blur-xs"
+          className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400 border border-amber-500/30 shadow-xs"
           title="Thinking: Chain-of-thought / extended reasoning"
         >
           <Brain className="h-2.5 w-2.5" />
@@ -161,7 +162,7 @@ export function ModelCapabilityBadges({
       )}
       {caps.hasAudio && (
         <span
-          className="inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 border border-emerald-500/30 shadow-xs backdrop-blur-xs"
+          className="inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 border border-emerald-500/30 shadow-xs"
           title="Audio: Supports voice & audio input"
         >
           <Volume2 className="h-2.5 w-2.5" />
@@ -170,4 +171,4 @@ export function ModelCapabilityBadges({
       )}
     </div>
   );
-}
+});
