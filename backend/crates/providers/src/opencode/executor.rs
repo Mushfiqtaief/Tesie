@@ -1911,12 +1911,12 @@ impl OpenCodeEngine {
                         let ttft_ms = st.first_token_at.map(|t| (t - st.attempt_start).max(1));
                         let tokens_per_sec = if usage.completion_tokens > 0 {
                             let decode_window_ms = match st.first_token_at {
-                                Some(t) if now - t >= 100 => now - t,
+                                Some(t) if now - t >= 200 => now - t,
                                 _ => latency_ms.max(50),
                             };
                             let raw =
                                 usage.completion_tokens as f64 / (decode_window_ms as f64 / 1000.0);
-                            Some((raw * 100.0).round() / 100.0)
+                            Some(((raw.min(500.0)) * 100.0).round() / 100.0)
                         } else {
                             None
                         };

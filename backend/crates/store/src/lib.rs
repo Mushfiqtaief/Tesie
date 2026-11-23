@@ -121,6 +121,18 @@ impl Store {
         self.ensure_token_saver_table().await?;
         self.ensure_custom_providers_table().await?;
         self.ensure_response_cache_table().await?;
+        self.sanitize_outlier_tps_records().await?;
+        Ok(())
+    }
+
+    async fn sanitize_outlier_tps_records(&self) -> Result<()> {
+        let _ = sqlx::query(
+            "UPDATE usage_logs 
+             SET tokens_per_sec = ROUND(MIN(500.0, (completion_tokens * 1000.0) / MAX(latency_ms, 50)), 2)
+             WHERE tokens_per_sec > 500.0",
+        )
+        .execute(&self.pool)
+        .await;
         Ok(())
     }
 

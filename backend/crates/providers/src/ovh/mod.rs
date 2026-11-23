@@ -618,15 +618,11 @@ impl OvhEngine {
                         let ttft_ms = st.first_token_at.map(|t| (t - st.attempt_start).max(1));
                         let tps = if usage.completion_tokens > 0 {
                             let win = match st.first_token_at {
-                                Some(t) if now - t >= 100 => now - t,
+                                Some(t) if now - t >= 200 => now - t,
                                 _ => latency_ms.max(50),
                             };
-                            Some(
-                                ((usage.completion_tokens as f64 / (win as f64 / 1000.0))
-                                    * 100.0)
-                                    .round()
-                                    / 100.0,
-                            )
+                            let raw = usage.completion_tokens as f64 / (win as f64 / 1000.0);
+                            Some(((raw.min(500.0)) * 100.0).round() / 100.0)
                         } else {
                             None
                         };

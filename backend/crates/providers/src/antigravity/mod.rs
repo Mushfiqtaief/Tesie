@@ -1477,12 +1477,15 @@ impl AntigravityEngine {
             active_map.lock().unwrap().remove(&req_id);
             let finished = now_ms();
             let latency_ms = (finished - started_at).max(1);
+            // If generation happened in <200ms (burst/buffered chunks or non-streaming),
+            // fall back to total latency so tiny delta windows don't produce impossible 69,000 tok/s spikes.
             let gen_ms = match ttft_ms {
-                Some(t) if latency_ms > t => latency_ms - t,
-                _ => latency_ms,
+                Some(t) if latency_ms - t >= 200 => latency_ms - t,
+                _ => latency_ms.max(50),
             };
             let tps = if ag_decoder.completion_tokens > 0 && gen_ms > 0 {
-                Some((ag_decoder.completion_tokens as f64) * 1000.0 / (gen_ms as f64))
+                let raw = (ag_decoder.completion_tokens as f64) * 1000.0 / (gen_ms as f64);
+                Some(((raw.min(500.0)) * 100.0).round() / 100.0)
             } else {
                 None
             };
