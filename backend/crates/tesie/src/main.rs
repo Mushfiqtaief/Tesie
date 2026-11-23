@@ -683,6 +683,22 @@ async fn main() -> Result<()> {
     if cli.auto_probe {
         engine.start_auto_quota_check_loop();
     }
+
+    // Periodic background log retention & cache pruning loop (every 30 minutes)
+    let prune_store = store.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        loop {
+            if let Ok(settings) = prune_store.settings().get_settings().await {
+                let _ = prune_store
+                    .usage()
+                    .prune_logs(settings.log_retention_days, settings.log_max_entries)
+                    .await;
+                let _ = prune_store.response_cache().prune_expired().await;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(1800)).await;
+        }
+    });
     let catalog = Arc::new(ModelCatalogCache::new());
     let frontend_dir = resolve_frontend_dir(cli.frontend_dir, &data_dir);
     if let Some(dir) = &frontend_dir {

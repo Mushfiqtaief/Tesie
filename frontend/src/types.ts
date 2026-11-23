@@ -731,6 +731,11 @@ export interface GatewaySettings {
   session_ttl_ms: number;
   proxy_test_interval_sec: number;
   exhaustive_failover: boolean;
+  response_cache_enabled: boolean;
+  response_cache_ttl_sec: number;
+  response_cache_max_entries: number;
+  log_retention_days: number | null;
+  log_max_entries: number | null;
 }
 
 export interface SettingsSystemInfo {
@@ -739,11 +744,20 @@ export interface SettingsSystemInfo {
   data_dir: string;
   db_path: string;
   db_size_bytes: number;
+  db_log_count?: number;
   auto_start_enabled: boolean;
   daemon_path: string;
   tray_active: boolean;
   core_healthy: boolean;
   proxy_test_interval_sec: number;
+}
+
+export interface ResponseCacheStats {
+  total_entries: number;
+  hit_count: number;
+  miss_count: number;
+  tokens_saved: number;
+  memory_entries: number;
 }
 
 export interface UpdateCheckResponse {

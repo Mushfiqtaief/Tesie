@@ -453,3 +453,91 @@ async fn backup_never_contains_the_admin_credential() {
     let sanitized = store.backup().export_backup(false).await.unwrap();
     assert!(sanitized["settings"]["admin_password"].is_null());
 }
+
+#[tokio::test]
+async fn response_cache_and_pruning_roundtrip() {
+    let store = Store::connect_in_memory().await.unwrap();
+    let cache = store.response_cache();
+
+    // 1. Initial state
+    let stats = cache.get_stats().await.unwrap();
+    assert_eq!(stats.total_entries, 0);
+
+    // 2. Set an entry
+    let record = tesie_core::ResponseCacheRecord {
+        cache_key: "hash-123".into(),
+        model: "deepseek-v4.1-flash".into(),
+        source_format: "openai-chat".into(),
+        response_payload: r#"{"id":"chatcmpl-1","choices":[{"message":{"content":"Hello world"}}]}"#.into(),
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        created_at: now_ms(),
+        expires_at: now_ms() + 3600_000,
+        hit_count: 0,
+        last_hit_at: None,
+    };
+    cache.set(&record, 100).await.unwrap();
+
+    // 3. Get entry -> hit
+    let hit = cache.get("hash-123").await.unwrap();
+    assert!(hit.is_some());
+    let hit_record = hit.unwrap();
+    assert_eq!(hit_record.model, "deepseek-v4.1-flash");
+    assert_eq!(hit_record.prompt_tokens, 10);
+
+    // 4. Record miss
+    cache.record_miss().await.unwrap();
+
+    // 5. Check stats
+    let stats = cache.get_stats().await.unwrap();
+    assert_eq!(stats.total_entries, 1);
+    assert_eq!(stats.hit_count, 1);
+    assert_eq!(stats.miss_count, 1);
+    assert_eq!(stats.tokens_saved, 15);
+
+    // 6. Purge
+    let deleted = cache.purge_all().await.unwrap();
+    assert_eq!(deleted, 1);
+    assert_eq!(cache.count().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn prune_logs_respects_time_and_max_entries() {
+    let store = Store::connect_in_memory().await.unwrap();
+    let usage = store.usage();
+
+    // Insert 10 sample logs directly with custom timestamps
+    let now = now_ms();
+    for i in 0..10 {
+        let ts = if i < 3 {
+            now - (40 * 86_400 * 1000) // 40 days old
+        } else {
+            now - (i * 1000)
+        };
+        sqlx::query(
+            "INSERT INTO usage_logs (
+                request_id, provider_id, model, proxy_name,
+                status_code, prompt_tokens, cached_tokens, completion_tokens, total_tokens,
+                latency_ms, created_at
+             ) VALUES (?, 'test', 'test-model', 'direct', 200, 10, 0, 5, 15, 100, ?)",
+        )
+        .bind(format!("req-{i}"))
+        .bind(ts)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(usage.count_logs().await.unwrap(), 10);
+
+    // Prune logs older than 30 days -> should delete 3
+    let deleted_days = usage.prune_logs(Some(30), None).await.unwrap();
+    assert_eq!(deleted_days, 3);
+    assert_eq!(usage.count_logs().await.unwrap(), 7);
+
+    // Prune logs exceeding max 4 -> should delete 3
+    let deleted_capacity = usage.prune_logs(None, Some(4)).await.unwrap();
+    assert_eq!(deleted_capacity, 3);
+    assert_eq!(usage.count_logs().await.unwrap(), 4);
+}

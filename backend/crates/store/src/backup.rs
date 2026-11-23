@@ -165,6 +165,11 @@ impl BackupRepo {
                     session_ttl_ms: Some(s.session_ttl_ms),
                     proxy_test_interval_sec: Some(s.proxy_test_interval_sec),
                     exhaustive_failover: Some(s.exhaustive_failover),
+                    response_cache_enabled: Some(s.response_cache_enabled),
+                    response_cache_ttl_sec: Some(s.response_cache_ttl_sec),
+                    response_cache_max_entries: Some(s.response_cache_max_entries),
+                    log_retention_days: Some(s.log_retention_days),
+                    log_max_entries: Some(s.log_max_entries),
                 })
                 .await?;
             summary.settings_updated = true;

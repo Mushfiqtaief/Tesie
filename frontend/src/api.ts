@@ -37,6 +37,7 @@ import type {
   QuotaProbeStatus,
   QuotaProbeSummary,
   ResetCooldownsResponse,
+  ResponseCacheStats,
   SettingsFullResponse,
   StartedOAuthFlow,
   StatusResponse,
@@ -768,6 +769,22 @@ export const api = {
 
   applyUpdate: async (): Promise<UpdateApplyResponse> => {
     return requestJson<UpdateApplyResponse>("/api/admin/update/apply", {
+      method: "POST",
+    });
+  },
+
+  getCacheStats: async (): Promise<ResponseCacheStats> => {
+    return requestJson<ResponseCacheStats>("/api/admin/cache/stats");
+  },
+
+  purgeCache: async (): Promise<{ ok: boolean; purged_entries: number; message: string }> => {
+    return requestJson<{ ok: boolean; purged_entries: number; message: string }>("/api/admin/cache/purge", {
+      method: "POST",
+    });
+  },
+
+  pruneLogs: async (): Promise<{ ok: boolean; deleted_logs: number; remaining_logs: number; message: string }> => {
+    return requestJson<{ ok: boolean; deleted_logs: number; remaining_logs: number; message: string }>("/api/admin/maintenance/prune-logs", {
       method: "POST",
     });
   },

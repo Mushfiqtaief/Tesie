@@ -4,6 +4,7 @@ import {
   ArrowUpCircle,
   Check,
   Copy,
+  Database,
   Download,
   ExternalLink,
   Github,
@@ -17,11 +18,13 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Zap,
 } from "lucide-react";
 import { api, setStoredAdminToken } from "../api";
 import { Button, INPUT_CLASS, StatusPill } from "../components/UiPrimitives";
 import type {
   BackupImportSummary,
+  ResponseCacheStats,
   SettingsFullResponse,
   UpdateApplyResponse,
   UpdateCheckResponse,
@@ -76,18 +79,34 @@ export const SettingsView = memo(function SettingsView({
   const [clearingLogs, setClearingLogs] = useState(false);
   const [clearingTokenSaver, setClearingTokenSaver] = useState(false);
 
+  // Response Cache & Log Retention state
+  const [cacheStats, setCacheStats] = useState<ResponseCacheStats | null>(null);
+  const [togglingCache, setTogglingCache] = useState(false);
+  const [purgingCache, setPurgingCache] = useState(false);
+  const [pruningLogs, setPruningLogs] = useState(false);
+
+  const loadCacheStats = useCallback(async () => {
+    try {
+      const stats = await api.getCacheStats();
+      setCacheStats(stats);
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.getFullSettings();
       setData(res);
       setHealthIntervalInput(String(res.settings.proxy_test_interval_sec ?? 15));
+      void loadCacheStats();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "Failed to load Tesie settings", true);
     } finally {
       setLoading(false);
     }
-  }, [onNotify]);
+  }, [onNotify, loadCacheStats]);
 
   const handleCheckUpdate = useCallback(
     async (silent = false) => {
@@ -333,6 +352,80 @@ export const SettingsView = memo(function SettingsView({
       onNotify(err instanceof Error ? err.message : "Failed to clear Token Saver stats", true);
     } finally {
       setClearingTokenSaver(false);
+    }
+  }
+
+  async function handleToggleCache(enabled: boolean) {
+    if (!data) return;
+    setTogglingCache(true);
+    try {
+      const updated = await api.updateFullSettings({ response_cache_enabled: enabled });
+      setData(updated);
+      onNotify(enabled ? "Response caching enabled" : "Response caching disabled");
+      void loadCacheStats();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to toggle response caching", true);
+    } finally {
+      setTogglingCache(false);
+    }
+  }
+
+  async function handleChangeCacheTtl(sec: number) {
+    if (!data) return;
+    try {
+      const updated = await api.updateFullSettings({ response_cache_ttl_sec: sec });
+      setData(updated);
+      onNotify(`Response cache TTL set to ${sec >= 86400 ? `${sec / 86400}d` : `${sec / 3600}h`}`);
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to update cache TTL", true);
+    }
+  }
+
+  async function handlePurgeCache() {
+    setPurgingCache(true);
+    try {
+      const res = await api.purgeCache();
+      onNotify(res.message || "Cache purged successfully");
+      void loadCacheStats();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to purge cache", true);
+    } finally {
+      setPurgingCache(false);
+    }
+  }
+
+  async function handleChangeLogRetention(days: number | null) {
+    if (!data) return;
+    try {
+      const updated = await api.updateFullSettings({ log_retention_days: days });
+      setData(updated);
+      onNotify(days ? `Log retention set to ${days} days` : "Log retention set to unlimited");
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to update log retention", true);
+    }
+  }
+
+  async function handleChangeMaxLogs(entries: number | null) {
+    if (!data) return;
+    try {
+      const updated = await api.updateFullSettings({ log_max_entries: entries });
+      setData(updated);
+      onNotify(entries ? `Max log capacity set to ${entries.toLocaleString()}` : "Max log capacity set to unlimited");
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to update log capacity", true);
+    }
+  }
+
+  async function handlePruneLogs() {
+    setPruningLogs(true);
+    try {
+      const res = await api.pruneLogs();
+      onNotify(res.message || "Pruned old logs and vacuumed database");
+      await loadSettings();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to prune logs", true);
+    } finally {
+      setPruningLogs(false);
     }
   }
 
@@ -621,6 +714,97 @@ export const SettingsView = memo(function SettingsView({
               <strong className="text-[var(--text-primary)] font-medium">Automatic Context-Window Compacting:</strong> Context limit exceeded errors (<code className="font-mono text-[11px]">context_length_exceeded</code> / prompt overflow) always fast-fail directly with clean HTTP 400 so AI tools (OpenCode, Claude Code, Aider) automatically compress chat history without exhausting proxy retries.
             </div>
           </div>
+
+          {/* Row 4: Gateway Response & Prompt Caching */}
+          <div className="px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="max-w-md">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-[var(--text-primary)]">
+                    Two-Tier Response &amp; Prompt Caching
+                  </span>
+                  <StatusPill tone={data?.settings.response_cache_enabled ? "success" : "neutral"} dot>
+                    {data?.settings.response_cache_enabled ? "L1/L2 Active" : "Disabled"}
+                  </StatusPill>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)] leading-relaxed">
+                  Caches deterministic responses in-memory and SQLite. Repeated queries from coding agents (Aider, Claude Code, OpenCode) return in ~2ms with 0 upstream tokens consumed.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-[var(--text-muted)]">TTL:</span>
+                  <select
+                    disabled={!data?.settings.response_cache_enabled}
+                    value={data?.settings.response_cache_ttl_sec ?? 86400}
+                    onChange={(e) => void handleChangeCacheTtl(Number(e.target.value))}
+                    className={`${INPUT_CLASS} py-1 px-2.5 text-xs font-mono`}
+                  >
+                    <option value={3600}>1 Hour</option>
+                    <option value={21600}>6 Hours</option>
+                    <option value={86400}>24 Hours</option>
+                    <option value={604800}>7 Days</option>
+                  </select>
+                </div>
+
+                <Button
+                  variant={data?.settings.response_cache_enabled ? "secondary" : "primary"}
+                  size="sm"
+                  disabled={togglingCache}
+                  onClick={() => void handleToggleCache(!data?.settings.response_cache_enabled)}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {data?.settings.response_cache_enabled ? "Disable Cache" : "Enable Cache"}
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={purgingCache || (cacheStats?.total_entries ?? 0) === 0}
+                  onClick={() => void handlePurgeCache()}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {purgingCache ? "Purging…" : "Purge Cache"}
+                </Button>
+              </div>
+            </div>
+
+            {/* Cache Metrics Bar */}
+            {data?.settings.response_cache_enabled && cacheStats && (
+              <div className="mt-3.5 grid grid-cols-2 sm:grid-cols-4 gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3 text-xs">
+                <div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Cached Entries</div>
+                  <div className="text-sm font-semibold font-mono text-[var(--text-primary)]">
+                    {cacheStats.total_entries.toLocaleString()}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Hits / Misses</div>
+                  <div className="text-sm font-semibold font-mono text-[var(--text-primary)]">
+                    {cacheStats.hit_count.toLocaleString()}{" "}
+                    <span className="text-[var(--text-muted)] font-normal text-xs">
+                      / {cacheStats.miss_count.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Hit Rate</div>
+                  <div className="text-sm font-semibold font-mono text-[var(--success)]">
+                    {cacheStats.hit_count + cacheStats.miss_count > 0
+                      ? `${Math.round((cacheStats.hit_count / (cacheStats.hit_count + cacheStats.miss_count)) * 100)}%`
+                      : "0%"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Tokens Saved</div>
+                  <div className="text-sm font-semibold font-mono text-[var(--accent)]">
+                    {cacheStats.tokens_saved.toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
@@ -862,7 +1046,74 @@ export const SettingsView = memo(function SettingsView({
             </div>
           )}
 
-          {/* Row 3: Maintenance Actions */}
+          {/* Row 3: Automatic SQLite Log Retention & Vacuum */}
+          <div className="px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="max-w-md">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-[var(--text-primary)]">
+                    SQLite Log Retention &amp; Auto-Vacuum
+                  </span>
+                  <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-mono text-[var(--text-secondary)]">
+                    {formatBytes(data?.system.db_size_bytes ?? 0)} · {(data?.system.db_log_count ?? 0).toLocaleString()} logs
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)] leading-relaxed">
+                  Automatically prunes historical request logs in the background and recovers freed disk space using SQLite incremental vacuum.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-[var(--text-muted)]">Keep:</span>
+                  <select
+                    value={data?.settings.log_retention_days ?? 0}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      void handleChangeLogRetention(val > 0 ? val : null);
+                    }}
+                    className={`${INPUT_CLASS} py-1 px-2.5 text-xs font-mono`}
+                  >
+                    <option value={7}>7 Days</option>
+                    <option value={14}>14 Days</option>
+                    <option value={30}>30 Days</option>
+                    <option value={90}>90 Days</option>
+                    <option value={0}>Unlimited</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-[var(--text-muted)]">Max logs:</span>
+                  <select
+                    value={data?.settings.log_max_entries ?? 0}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      void handleChangeMaxLogs(val > 0 ? val : null);
+                    }}
+                    className={`${INPUT_CLASS} py-1 px-2.5 text-xs font-mono`}
+                  >
+                    <option value={5000}>5,000</option>
+                    <option value={10000}>10,000</option>
+                    <option value={25000}>25,000</option>
+                    <option value={50000}>50,000</option>
+                    <option value={0}>Unlimited</option>
+                  </select>
+                </div>
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={pruningLogs}
+                  onClick={() => void handlePruneLogs()}
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  {pruningLogs ? "Vacuuming…" : "Prune & Vacuum"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 4: Maintenance Actions */}
           <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
             <div>
               <div className="text-sm font-medium text-[var(--text-primary)]">

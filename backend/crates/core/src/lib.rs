@@ -15,7 +15,7 @@ pub use models::{
     AntigravityModelQuotaEntry, AntigravityPoolWindow, AntigravityQuotaSnapshot, ApiKeyRecord,
     BridgeEvent, BridgeStats, ComboRecord, CustomProvider, GatewaySettings, IpCandidate, IpQuota,
     IpQuotaStatus, MultimodalBridgeConfig, ProviderConfig, ProviderConnection, ProviderKind,
-    ProxyNode, UsageLogInput, UsageLogRecord, WireFormat,
+    ProxyNode, ResponseCacheRecord, ResponseCacheStats, UsageLogInput, UsageLogRecord, WireFormat,
 };
 pub use token_saver::{
     apply_token_saver_to_request, compress_text_detailed, style_prompt_for, RequestSavingsReport,

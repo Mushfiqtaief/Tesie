@@ -325,7 +325,66 @@ impl UsageRepo {
             .execute(&self.pool)
             .await
             .map_err(map_sqlx_err)?;
+        let _ = sqlx::query("PRAGMA incremental_vacuum(100)")
+            .execute(&self.pool)
+            .await;
         Ok(res.rows_affected())
+    }
+
+    pub async fn count_logs(&self) -> Result<i64> {
+        let row = sqlx::query("SELECT COUNT(1) AS cnt FROM usage_logs")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_err)?;
+        let count: i64 = row.try_get("cnt").map_err(map_sqlx_err)?;
+        Ok(count)
+    }
+
+    pub async fn prune_logs(
+        &self,
+        retention_days: Option<i64>,
+        max_entries: Option<i64>,
+    ) -> Result<u64> {
+        let mut deleted_total = 0u64;
+
+        if let Some(days) = retention_days {
+            if days > 0 {
+                let cutoff_ms = now_ms() - (days * 86_400 * 1000);
+                let res = sqlx::query("DELETE FROM usage_logs WHERE created_at < ?")
+                    .bind(cutoff_ms)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(map_sqlx_err)?;
+                deleted_total += res.rows_affected();
+            }
+        }
+
+        if let Some(limit) = max_entries {
+            if limit > 0 {
+                let total = self.count_logs().await?;
+                if total > limit {
+                    let excess = total - limit;
+                    let res = sqlx::query(
+                        "DELETE FROM usage_logs WHERE id IN (
+                            SELECT id FROM usage_logs ORDER BY created_at ASC LIMIT ?
+                        )",
+                    )
+                    .bind(excess)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(map_sqlx_err)?;
+                    deleted_total += res.rows_affected();
+                }
+            }
+        }
+
+        if deleted_total > 0 {
+            let _ = sqlx::query("PRAGMA incremental_vacuum(50)")
+                .execute(&self.pool)
+                .await;
+        }
+
+        Ok(deleted_total)
     }
 
     pub async fn summarize_usage(&self, recent_limit: i64) -> Result<UsageSummary> {

@@ -59,6 +59,7 @@ pub fn build_app_router(
         catalog: catalog.clone(),
         require_api_key: opts.require_api_key,
         fetch_live_models: opts.fetch_live_models,
+        memory_cache: tesie_gateway::MemoryCache::default(),
     };
     let adm_state = AdminState {
         store: store.clone(),

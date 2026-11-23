@@ -24,6 +24,13 @@ pub struct UpdateSettingsInput {
     pub session_ttl_ms: Option<i64>,
     pub proxy_test_interval_sec: Option<u64>,
     pub exhaustive_failover: Option<bool>,
+    pub response_cache_enabled: Option<bool>,
+    pub response_cache_ttl_sec: Option<i64>,
+    pub response_cache_max_entries: Option<i64>,
+    #[serde(default, deserialize_with = "crate::deserialize_double_option")]
+    pub log_retention_days: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "crate::deserialize_double_option")]
+    pub log_max_entries: Option<Option<i64>>,
 }
 
 impl SettingsRepo {
@@ -86,6 +93,38 @@ impl SettingsRepo {
             out.exhaustive_failover =
                 matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1");
         }
+        if let Some(v) = map.get("response_cache_enabled") {
+            out.response_cache_enabled =
+                matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1");
+        }
+        if let Some(v) = map.get("response_cache_ttl_sec")
+            && let Ok(n) = v.trim().parse::<i64>()
+            && n > 0
+        {
+            out.response_cache_ttl_sec = n.clamp(60, 2_592_000); // 1 min to 30 days
+        }
+        if let Some(v) = map.get("response_cache_max_entries")
+            && let Ok(n) = v.trim().parse::<i64>()
+            && n > 0
+        {
+            out.response_cache_max_entries = n.clamp(100, 100_000);
+        }
+        if let Some(v) = map.get("log_retention_days") {
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed == "0" {
+                out.log_retention_days = None;
+            } else if let Ok(n) = trimmed.parse::<i64>() {
+                out.log_retention_days = Some(n.clamp(1, 365));
+            }
+        }
+        if let Some(v) = map.get("log_max_entries") {
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed == "0" {
+                out.log_max_entries = None;
+            } else if let Ok(n) = trimmed.parse::<i64>() {
+                out.log_max_entries = Some(n.clamp(1_000, 1_000_000));
+            }
+        }
 
         Ok(out)
     }
@@ -131,6 +170,38 @@ impl SettingsRepo {
         if let Some(failover) = input.exhaustive_failover {
             self.set_raw("exhaustive_failover", if failover { "true" } else { "false" }, now)
                 .await?;
+        }
+        if let Some(cache_enabled) = input.response_cache_enabled {
+            self.set_raw("response_cache_enabled", if cache_enabled { "true" } else { "false" }, now)
+                .await?;
+        }
+        if let Some(ttl_sec) = input.response_cache_ttl_sec
+            && ttl_sec > 0
+        {
+            let clamped = ttl_sec.clamp(60, 2_592_000);
+            self.set_raw("response_cache_ttl_sec", &clamped.to_string(), now)
+                .await?;
+        }
+        if let Some(max_entries) = input.response_cache_max_entries
+            && max_entries > 0
+        {
+            let clamped = max_entries.clamp(100, 100_000);
+            self.set_raw("response_cache_max_entries", &clamped.to_string(), now)
+                .await?;
+        }
+        if let Some(retention_days) = input.log_retention_days {
+            let val = retention_days
+                .filter(|&v| v > 0)
+                .map(|v| v.clamp(1, 365).to_string())
+                .unwrap_or_default();
+            self.set_raw("log_retention_days", &val, now).await?;
+        }
+        if let Some(max_logs) = input.log_max_entries {
+            let val = max_logs
+                .filter(|&v| v > 0)
+                .map(|v| v.clamp(1_000, 1_000_000).to_string())
+                .unwrap_or_default();
+            self.set_raw("log_max_entries", &val, now).await?;
         }
 
         let updated = self.get_settings().await?;

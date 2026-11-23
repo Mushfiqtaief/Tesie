@@ -1,5 +1,8 @@
 ﻿pub mod aggregator;
 pub mod bridge;
+pub mod cache_engine;
+
+pub use cache_engine::*;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -32,6 +35,7 @@ pub struct GatewayState {
     pub catalog: Arc<ModelCatalogCache>,
     pub require_api_key: bool,
     pub fetch_live_models: bool,
+    pub memory_cache: MemoryCache,
 }
 
 pub fn gateway_router(state: GatewayState) -> Router {
@@ -1043,6 +1047,73 @@ async fn handle_gateway_request_with_auth(
     let ts_report =
         apply_token_saver_to_request(&mut body, source_format, &header_pairs, &ts_cfg);
 
+    let settings = state
+        .store
+        .settings()
+        .get_settings()
+        .await
+        .unwrap_or_default();
+    let is_cacheable = is_request_cacheable(&body, &headers, &settings);
+    let cache_key = if is_cacheable {
+        compute_cache_key(&raw_model, &body, source_format)
+    } else {
+        None
+    };
+
+    if let Some(ref key) = cache_key {
+        let now = tesie_store::now_ms();
+        let cached_opt = if let Some(mem_rec) = state.memory_cache.get(key, now) {
+            let store_clone = state.store.clone();
+            let key_str = key.clone();
+            let tokens = mem_rec.total_tokens;
+            tokio::spawn(async move {
+                let _ = store_clone.response_cache().record_hit(&key_str, tokens).await;
+            });
+            Some(mem_rec)
+        } else if let Ok(Some(db_rec)) = state.store.response_cache().get(key).await {
+            state.memory_cache.put(db_rec.clone());
+            Some(db_rec)
+        } else {
+            None
+        };
+
+        if let Some(cached) = cached_opt {
+            if let Ok(payload) = serde_json::from_str::<Value>(&cached.response_payload) {
+                if client_wants_stream {
+                    let stream = replay_cached_as_sse_stream(source_format, &raw_model, &payload);
+                    let mut resp = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "text/event-stream; charset=utf-8")
+                        .header(CACHE_CONTROL, "no-cache")
+                        .header(HeaderName::from_static("x-tesie-cache"), HeaderValue::from_static("HIT"))
+                        .header(HeaderName::from_static("x-tesie-proxy"), HeaderValue::from_static("CACHE"))
+                        .body(Body::from_stream(stream))
+                        .unwrap();
+                    if let Ok(m_val) = HeaderValue::from_str(&cached.model) {
+                        resp.headers_mut().insert(HeaderName::from_static("x-tesie-model"), m_val);
+                    }
+                    if let Ok(t_val) = HeaderValue::from_str(&cached.total_tokens.to_string()) {
+                        resp.headers_mut().insert(HeaderName::from_static("x-tesie-tokens-saved"), t_val);
+                    }
+                    return resp;
+                } else {
+                    let mut resp = (StatusCode::OK, Json(payload)).into_response();
+                    resp.headers_mut().insert(HeaderName::from_static("x-tesie-cache"), HeaderValue::from_static("HIT"));
+                    resp.headers_mut().insert(HeaderName::from_static("x-tesie-proxy"), HeaderValue::from_static("CACHE"));
+                    if let Ok(m_val) = HeaderValue::from_str(&cached.model) {
+                        resp.headers_mut().insert(HeaderName::from_static("x-tesie-model"), m_val);
+                    }
+                    if let Ok(t_val) = HeaderValue::from_str(&cached.total_tokens.to_string()) {
+                        resp.headers_mut().insert(HeaderName::from_static("x-tesie-tokens-saved"), t_val);
+                    }
+                    return resp;
+                }
+            }
+        } else {
+            let _ = state.store.response_cache().record_miss().await;
+        }
+    }
+
     // Check if the requested model matches a Combo (`<name>` or `combo/<name>`)
     let combo_lookup = raw_model.strip_prefix("combo/").unwrap_or(&raw_model);
     let maybe_combo = state
@@ -1171,14 +1242,66 @@ async fn handle_gateway_request_with_auth(
     }
 
     if client_wants_stream {
-        let mapped_stream = provider_resp
-            .stream
-            .map(|item| item.map_err(|e| std::io::Error::other(e.to_string())));
+        let stream_key = cache_key.clone();
+        let stream_model = model.clone();
+        let stream_format = source_format;
+        let stream_ttl = settings.response_cache_ttl_sec;
+        let stream_max = settings.response_cache_max_entries;
+        let store_clone = state.store.clone();
+        let mem_clone = state.memory_cache.clone();
+
+        let mapped_stream: Body = if let Some(key_str) = stream_key {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bytes::Bytes>();
+            tokio::spawn(async move {
+                let mut chunks = Vec::new();
+                while let Some(b) = rx.recv().await {
+                    chunks.push(b);
+                }
+                let byte_stream = futures::stream::iter(chunks.into_iter().map(Ok));
+                if let Ok(payload) = drain_and_aggregate(stream_format, &stream_model, byte_stream).await {
+                    let (prompt_tok, comp_tok, tot_tok) = extract_usage_tokens(&payload);
+                    let now = tesie_store::now_ms();
+                    let record = tesie_core::ResponseCacheRecord {
+                        cache_key: key_str,
+                        model: stream_model,
+                        source_format: format!("{:?}", stream_format),
+                        response_payload: payload.to_string(),
+                        prompt_tokens: prompt_tok,
+                        completion_tokens: comp_tok,
+                        total_tokens: tot_tok,
+                        created_at: now,
+                        expires_at: now + (stream_ttl * 1000),
+                        hit_count: 0,
+                        last_hit_at: None,
+                    };
+                    mem_clone.put(record.clone());
+                    let _ = store_clone.response_cache().set(&record, stream_max).await;
+                }
+            });
+
+            let stream_with_tap = provider_resp.stream.map(move |item| {
+                match item {
+                    Ok(b) => {
+                        let _ = tx.send(b.clone());
+                        Ok(b)
+                    }
+                    Err(e) => Err(std::io::Error::other(e.to_string())),
+                }
+            });
+            Body::from_stream(stream_with_tap)
+        } else {
+            let mapped = provider_resp
+                .stream
+                .map(|item| item.map_err(|e| std::io::Error::other(e.to_string())));
+            Body::from_stream(mapped)
+        };
+
         let mut resp = Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "text/event-stream; charset=utf-8")
             .header(CACHE_CONTROL, "no-cache")
-            .body(Body::from_stream(mapped_stream))
+            .header(HeaderName::from_static("x-tesie-cache"), HeaderValue::from_static("MISS"))
+            .body(mapped_stream)
             .unwrap();
         attach_proxy_headers(
             resp.headers_mut(),
@@ -1193,7 +1316,32 @@ async fn handle_gateway_request_with_auth(
 
     match drain_and_aggregate(source_format, &model, provider_resp.stream).await {
         Ok(payload) => {
+            if let Some(key_str) = cache_key {
+                let (prompt_tok, comp_tok, tot_tok) = extract_usage_tokens(&payload);
+                let now = tesie_store::now_ms();
+                let record = tesie_core::ResponseCacheRecord {
+                    cache_key: key_str,
+                    model: model.clone(),
+                    source_format: format!("{:?}", source_format),
+                    response_payload: payload.to_string(),
+                    prompt_tokens: prompt_tok,
+                    completion_tokens: comp_tok,
+                    total_tokens: tot_tok,
+                    created_at: now,
+                    expires_at: now + (settings.response_cache_ttl_sec * 1000),
+                    hit_count: 0,
+                    last_hit_at: None,
+                };
+                state.memory_cache.put(record.clone());
+                let store_clone = state.store.clone();
+                let max_entries = settings.response_cache_max_entries;
+                tokio::spawn(async move {
+                    let _ = store_clone.response_cache().set(&record, max_entries).await;
+                });
+            }
+
             let mut resp = (StatusCode::OK, Json(payload)).into_response();
+            resp.headers_mut().insert(HeaderName::from_static("x-tesie-cache"), HeaderValue::from_static("MISS"));
             attach_proxy_headers(
                 resp.headers_mut(),
                 &proxy_name,

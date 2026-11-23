@@ -403,6 +403,11 @@ pub struct GatewaySettings {
     pub session_ttl_ms: i64,
     pub proxy_test_interval_sec: u64,
     pub exhaustive_failover: bool,
+    pub response_cache_enabled: bool,
+    pub response_cache_ttl_sec: i64,
+    pub response_cache_max_entries: i64,
+    pub log_retention_days: Option<i64>,
+    pub log_max_entries: Option<i64>,
 }
 
 impl Default for GatewaySettings {
@@ -415,8 +420,37 @@ impl Default for GatewaySettings {
             session_ttl_ms: 14_400_000,
             proxy_test_interval_sec: 15,
             exhaustive_failover: true,
+            response_cache_enabled: true,
+            response_cache_ttl_sec: 86_400,
+            response_cache_max_entries: 5_000,
+            log_retention_days: Some(30),
+            log_max_entries: Some(25_000),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseCacheRecord {
+    pub cache_key: String,
+    pub model: String,
+    pub source_format: String,
+    pub response_payload: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub hit_count: i64,
+    pub last_hit_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResponseCacheStats {
+    pub total_entries: i64,
+    pub hit_count: i64,
+    pub miss_count: i64,
+    pub tokens_saved: i64,
+    pub memory_entries: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

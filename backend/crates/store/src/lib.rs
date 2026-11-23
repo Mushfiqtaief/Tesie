@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod bridge;
+pub mod cache;
 pub mod combos;
 pub mod connections;
 pub mod custom_providers;
@@ -24,6 +25,7 @@ use tesie_core::{Result, TesRouteError};
 
 use backup::BackupRepo;
 use bridge::BridgeRepo;
+use cache::ResponseCacheRepo;
 use combos::CombosRepo;
 use connections::ConnectionsRepo;
 use custom_providers::CustomProvidersRepo;
@@ -118,6 +120,44 @@ impl Store {
         self.relax_antigravity_probe_interval_once().await?;
         self.ensure_token_saver_table().await?;
         self.ensure_custom_providers_table().await?;
+        self.ensure_response_cache_table().await?;
+        Ok(())
+    }
+
+    async fn ensure_response_cache_table(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS response_cache (
+                cache_key TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                source_format TEXT NOT NULL,
+                response_payload TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                last_hit_at INTEGER
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_response_cache_expires_at ON response_cache(expires_at)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_response_cache_model ON response_cache(model)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_err)?;
+
         Ok(())
     }
 
@@ -684,6 +724,10 @@ impl Store {
 
     pub fn backup(&self) -> BackupRepo {
         BackupRepo::new(self.pool.clone())
+    }
+
+    pub fn response_cache(&self) -> ResponseCacheRepo {
+        ResponseCacheRepo::new(self.pool.clone())
     }
 }
 

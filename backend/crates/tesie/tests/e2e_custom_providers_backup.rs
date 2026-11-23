@@ -256,6 +256,7 @@ async fn e2e_custom_provider_streaming_round_robin_backup_and_security() {
     for _ in 0..2 {
         let chat_res = client
             .post(format!("{base}/v1/chat/completions"))
+            .header("cache-control", "no-cache")
             .json(&json!({
                 "model": "lf/gpt-4o-mini",
                 "stream": true,

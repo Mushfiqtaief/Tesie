@@ -153,6 +153,9 @@ pub fn admin_router(state: AdminState) -> Router {
             "/maintenance/reset-cooldowns",
             post(reset_all_cooldowns_maintenance),
         )
+        .route("/maintenance/prune-logs", post(prune_logs_maintenance))
+        .route("/cache/stats", get(get_cache_stats))
+        .route("/cache/purge", post(purge_cache))
         .route(
             "/token-saver",
             get(get_token_saver)
@@ -2893,6 +2896,7 @@ async fn build_settings_payload(state: &AdminState) -> std::result::Result<Value
             "data_dir": data_dir.to_string_lossy(),
             "db_path": db_path.to_string_lossy(),
             "db_size_bytes": db_size_bytes,
+            "db_log_count": state.store.usage().count_logs().await.unwrap_or(0),
             "auto_start_enabled": system::is_autostart_enabled(),
             "daemon_path": system::resolve_daemon_exe_path(&data_dir).to_string_lossy(),
             "tray_active": tray_active,
@@ -2922,6 +2926,13 @@ struct UpdateSettingsBody {
     pub session_ttl_ms: Option<i64>,
     pub proxy_test_interval_sec: Option<u64>,
     pub exhaustive_failover: Option<bool>,
+    pub response_cache_enabled: Option<bool>,
+    pub response_cache_ttl_sec: Option<i64>,
+    pub response_cache_max_entries: Option<i64>,
+    #[serde(default, deserialize_with = "tesie_store::deserialize_double_option")]
+    pub log_retention_days: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "tesie_store::deserialize_double_option")]
+    pub log_max_entries: Option<Option<i64>>,
     #[serde(default, deserialize_with = "tesie_store::deserialize_double_option")]
     pub admin_password: Option<Option<String>>,
     #[serde(default)]
@@ -2940,6 +2951,11 @@ async fn update_settings(
         session_ttl_ms: body.session_ttl_ms,
         proxy_test_interval_sec: body.proxy_test_interval_sec,
         exhaustive_failover: body.exhaustive_failover,
+        response_cache_enabled: body.response_cache_enabled,
+        response_cache_ttl_sec: body.response_cache_ttl_sec,
+        response_cache_max_entries: body.response_cache_max_entries,
+        log_retention_days: body.log_retention_days,
+        log_max_entries: body.log_max_entries,
     };
     state
         .store
@@ -3060,6 +3076,63 @@ async fn reset_all_cooldowns_maintenance(
         "cleared_connections": cleared_connections,
         "cleared_model_locks": cleared_model_locks,
         "cleared_model_failures": cleared_model_failures,
+    })))
+}
+
+async fn prune_logs_maintenance(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let settings = state
+        .store
+        .settings()
+        .get_settings()
+        .await
+        .map_err(err_resp)?;
+    let deleted = state
+        .store
+        .usage()
+        .prune_logs(settings.log_retention_days, settings.log_max_entries)
+        .await
+        .map_err(err_resp)?;
+    let remaining = state
+        .store
+        .usage()
+        .count_logs()
+        .await
+        .map_err(err_resp)?;
+    Ok(Json(json!({
+        "ok": true,
+        "deleted_logs": deleted,
+        "remaining_logs": remaining,
+        "message": format!("Pruned {} old logs. {} logs remaining.", deleted, remaining),
+    })))
+}
+
+async fn get_cache_stats(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let stats = state
+        .store
+        .response_cache()
+        .get_stats()
+        .await
+        .map_err(err_resp)?;
+    Ok(Json(json!(stats)))
+}
+
+async fn purge_cache(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let purged = state
+        .store
+        .response_cache()
+        .purge_all()
+        .await
+        .map_err(err_resp)?;
+    Ok(Json(json!({
+        "ok": true,
+        "purged_entries": purged,
+        "message": format!("Purged {} cached responses", purged),
     })))
 }
 

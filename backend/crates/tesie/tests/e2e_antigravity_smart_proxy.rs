@@ -176,8 +176,8 @@ async fn mock_load_code_assist(headers: HeaderMap) -> Json<Value> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     assert!(
-        ua.starts_with("antigravity/cli/"),
-        "expected antigravity CLI UA on discovery, got {ua}"
+        ua.starts_with("antigravity/cli/") || ua.starts_with("antigravity/hub/"),
+        "expected antigravity CLI/hub UA on discovery, got {ua}"
     );
     Json(json!({
         "cloudaicompanionProject": "proj-e2e-antigravity"
@@ -613,13 +613,14 @@ async fn e2e_antigravity_smart_proxy_partition_sticky_and_fallback() {
 
     // 4. Two consecutive Antigravity chat completions must stick to Account 1's `NODE - 1` (NO round-robin!)
     //    and uncloak `write_file_ide` -> `write_file`
-    for _ in 0..2 {
+    for i in 0..2 {
         let chat_res = client
             .post(format!("{base}/v1/chat/completions"))
+            .header("cache-control", "no-cache")
             .json(&json!({
                 "model": "ag/gemini-4-carbon",
                 "stream": false,
-                "messages": [{ "role": "user", "content": "Create hello.txt" }],
+                "messages": [{ "role": "user", "content": format!("Create hello-{i}.txt") }],
                 "tools": [{
                     "type": "function",
                     "function": {
@@ -655,6 +656,7 @@ async fn e2e_antigravity_smart_proxy_partition_sticky_and_fallback() {
     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     let failover_res = client
         .post(format!("{base}/v1/chat/completions"))
+        .header("cache-control", "no-cache")
         .json(&json!({
             "model": "ag/gemini-4-carbon",
             "stream": false,
@@ -685,6 +687,7 @@ async fn e2e_antigravity_smart_proxy_partition_sticky_and_fallback() {
     exhaust_acct_1.store(true, Ordering::SeqCst);
     let acct_failover_res = client
         .post(format!("{base}/v1/chat/completions"))
+        .header("cache-control", "no-cache")
         .json(&json!({
             "model": "ag/gemini-4-carbon",
             "stream": false,
