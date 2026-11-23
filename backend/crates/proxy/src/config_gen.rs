@@ -238,6 +238,11 @@ pub fn generate_mihomo_yaml(
         "mode": "rule",
         "ipv6": false,
         "allow-lan": false,
+        // 0 disables the inbound listener: the relay only dials out via /tesie/relay.
+        // Unset, mihomo binds its default 7890 and collides with other mihomo processes.
+        "mixed-port": 0,
+        "port": 0,
+        "socks-port": 0,
         "log-level": "warning",
         "external-controller": ctl_addr,
         "secret": ctl_secret,

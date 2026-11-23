@@ -180,12 +180,13 @@ impl QuotasRepo {
     where
         F: Fn(&ProxyNode) -> bool,
     {
-        // 1. Auto-reset any expired cooldowns for OVH
+        // 1. Auto-reset any expired cooldowns for OVH (also clear any corrupted multi-day cooldowns)
         let _ = sqlx::query(
             "UPDATE ip_quotas
              SET status = 'active', cooldown_until = NULL, backoff_level = 0, updated_at = ?
-             WHERE provider_id = 'ovh' AND status = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?",
+             WHERE provider_id = 'ovh' AND status = 'cooldown' AND (cooldown_until IS NULL OR cooldown_until <= ? OR cooldown_until > ? + 120000)",
         )
+        .bind(now)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -251,7 +252,20 @@ impl QuotasRepo {
             candidates.push(IpCandidate { proxy, quota });
         }
 
-        Ok(interleave_candidates_by_subnet(candidates))
+        // OVH 2 req/min rate limit optimization:
+        // Prioritize IPs with lowest usage in current window (0 req first, then 1 req),
+        // and among those, pick the least recently used (oldest or null last_used_at).
+        candidates.sort_by(|a, b| {
+            let req_cmp = a.quota.requests_in_window.cmp(&b.quota.requests_in_window);
+            if req_cmp != std::cmp::Ordering::Equal {
+                return req_cmp;
+            }
+            let a_used = a.quota.last_used_at.unwrap_or(0);
+            let b_used = b.quota.last_used_at.unwrap_or(0);
+            a_used.cmp(&b_used)
+        });
+
+        Ok(candidates)
     }
 
     async fn select_healthy_candidates_from_proxies<F>(
@@ -413,10 +427,13 @@ impl QuotasRepo {
         sqlx::query(
             "UPDATE ip_quotas
              SET status = 'cooldown', cooldown_until = ?, total_rate_limits = total_rate_limits + 1,
+                 requests_in_window = max(requests_in_window, 2),
+                 last_used_at = ?,
                  last_error = ?, updated_at = ?
              WHERE ip_key = ?",
         )
         .bind(cooldown_until)
+        .bind(now)
         .bind(error_msg)
         .bind(now)
         .bind(&ovh_key)
@@ -441,7 +458,17 @@ impl QuotasRepo {
             format!("ovh:{ip_key}")
         };
         let (status, cooldown_until) = if remaining_reqs == Some(0) {
-            let dur = reset_sec.unwrap_or(60).max(1);
+            let dur = reset_sec
+                .map(|r| {
+                    let now_s = now / 1000;
+                    if r > now_s {
+                        r - now_s
+                    } else {
+                        r
+                    }
+                })
+                .unwrap_or(60)
+                .clamp(1, 60);
             ("cooldown", Some(now + dur * 1000))
         } else {
             ("active", None)
@@ -682,12 +709,22 @@ impl QuotasRepo {
             .list_for_provider_config(cfg)
             .await?;
 
+        let is_ovh = cfg.provider_id == "ovh";
         let mut ordered_ip_keys: Vec<String> = Vec::new();
         let mut by_ip: HashMap<String, Vec<String>> = HashMap::new();
         for p in &selected_proxies {
-            self.ensure_ip_quota_row(&p.ip_key(), &settings, now)
-                .await?;
-            let ip_key = p.ip_key();
+            let ip_key = if is_ovh {
+                format!("ovh:{}", p.ip_key())
+            } else {
+                p.ip_key()
+            };
+            if is_ovh {
+                self.ensure_ip_quota_row_for_provider("ovh", &ip_key, 60_000, Some(2), now)
+                    .await?;
+            } else {
+                self.ensure_ip_quota_row(&ip_key, &settings, now)
+                    .await?;
+            }
             if !by_ip.contains_key(&ip_key) {
                 ordered_ip_keys.push(ip_key.clone());
             }

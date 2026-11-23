@@ -4,6 +4,7 @@ pub mod combos;
 pub mod connections;
 pub mod custom_providers;
 pub mod keys;
+pub mod mitm;
 pub mod provider_configs;
 pub mod proxies;
 pub mod quotas;
@@ -27,6 +28,7 @@ use combos::CombosRepo;
 use connections::ConnectionsRepo;
 use custom_providers::CustomProvidersRepo;
 use keys::KeysRepo;
+use mitm::MitmRepo;
 use provider_configs::ProviderConfigsRepo;
 use proxies::ProxiesRepo;
 use quotas::QuotasRepo;
@@ -421,6 +423,14 @@ impl Store {
         .await
         .map_err(map_sqlx_err)?;
 
+        // Delete any deprecated/removed codebuff provider rows and connections
+        let _ = sqlx::query("DELETE FROM provider_configs WHERE provider_id = 'codebuff'")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM provider_connections WHERE provider_id = 'codebuff'")
+            .execute(&self.pool)
+            .await;
+
         // Remove deprecated OpenCode Zen & OpenCode Go rows so only OpenCode Free & Antigravity remain
         sqlx::query("DELETE FROM provider_configs WHERE provider_id IN ('opencode-zen', 'opencode-go')")
             .execute(&self.pool)
@@ -666,6 +676,10 @@ impl Store {
 
     pub fn bridge(&self) -> BridgeRepo {
         BridgeRepo::new(self.pool.clone())
+    }
+
+    pub fn mitm(&self) -> MitmRepo {
+        MitmRepo::new(self.pool.clone())
     }
 
     pub fn backup(&self) -> BackupRepo {

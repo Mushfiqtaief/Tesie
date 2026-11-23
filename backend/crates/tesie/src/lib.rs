@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::Path as AxumPath;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderValue, Method, Request, StatusCode, Uri};
@@ -93,26 +94,35 @@ pub fn build_app_router(
     }
 
     router
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
 
-async fn serve_spa_asset(root: &Path, method: &Method, uri: &Uri) -> Response {
-    if method != Method::GET && method != Method::HEAD {
-        return StatusCode::METHOD_NOT_ALLOWED.into_response();
-    }
+/// Coding agents send multi-megabyte prompts; axum's 2 MB default rejected them here
+/// before the upstream ever saw them.
+const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
+async fn serve_spa_asset(root: &Path, method: &Method, uri: &Uri) -> Response {
+    // API-shaped paths must never reach the static file server. Check the path before the
+    // method so unmatched endpoints answer 404 instead of 405 (a 405 with an empty body is
+    // indistinguishable from a broken upstream to clients like Antigravity).
     let raw_path = uri.path();
     if raw_path.starts_with("/api/")
         || raw_path == "/api"
         || raw_path.starts_with("/v1/")
         || raw_path == "/v1"
+        || raw_path.starts_with("/v1internal")
     {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "endpoint not found" })),
         )
             .into_response();
+    }
+
+    if method != Method::GET && method != Method::HEAD {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
 
     let trimmed = raw_path.trim_start_matches('/');

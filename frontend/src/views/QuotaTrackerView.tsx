@@ -287,20 +287,35 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
     [exportScope, exportScopes],
   );
 
+  const isAntigravity = hasAntigravityAccounts && selectedProviderId === "antigravity";
+  const isOvh = selectedProviderId === "ovh";
+
+  const opencodeIpQuotas = useMemo(
+    () => ipQuotas.filter((q) => q.provider_id !== "ovh" && !q.ip_key.startsWith("ovh:")),
+    [ipQuotas],
+  );
+
+  const ovhIpQuotas = useMemo(
+    () => ipQuotas.filter((q) => q.provider_id === "ovh" || q.ip_key.startsWith("ovh:")),
+    [ipQuotas],
+  );
+
+  const currentProviderIpQuotas = isOvh ? ovhIpQuotas : opencodeIpQuotas;
+
   const { realCoolingCount, realReadyCount } = useMemo(() => {
     let cooling = 0;
-    for (const q of ipQuotas) {
+    for (const q of currentProviderIpQuotas) {
       if (q.status === "cooldown") cooling += 1;
     }
     return {
       realCoolingCount: cooling,
-      realReadyCount: Math.max(0, ipQuotas.length - cooling),
+      realReadyCount: Math.max(0, currentProviderIpQuotas.length - cooling),
     };
-  }, [ipQuotas]);
+  }, [currentProviderIpQuotas]);
 
   const filteredIpQuotas = useMemo(
     () =>
-      ipQuotas
+      currentProviderIpQuotas
         .filter((q) => {
           const isCooling = q.status === "cooldown";
           if (ipFilter === "active" && isCooling) return false;
@@ -321,7 +336,7 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
           if (aUsed !== bUsed) return bUsed - aUsed;
           return a.ip_key.localeCompare(b.ip_key);
         }),
-    [ipFilter, ipQuotas, qLower],
+    [currentProviderIpQuotas, ipFilter, qLower],
   );
 
   const visibleIpQuotas = useMemo(
@@ -381,8 +396,8 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
         "Passive-first per-IP quota tracking across the TesieCore global proxy pool with Round-Robin selection and verified cooldown recovery.",
       strategy: "ip_pool",
       unit_label: "Exit IP",
-      active_count: ipQuotas.filter((q) => q.status !== "cooldown").length,
-      cooling_count: ipQuotas.filter((q) => q.status === "cooldown").length,
+      active_count: opencodeIpQuotas.filter((q) => q.status !== "cooldown").length,
+      cooling_count: opencodeIpQuotas.filter((q) => q.status === "cooldown").length,
     };
 
   const antigravitySummary: ProviderQuotaSummary =
@@ -397,11 +412,28 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
       cooling_count: agAccounts.filter((a) => a.enabled && a.status === "cooldown").length,
     };
 
-  const providerTabs = hasAntigravityAccounts
-    ? [opencodeSummary, antigravitySummary]
-    : [opencodeSummary];
-  const isAntigravity = hasAntigravityAccounts && selectedProviderId === "antigravity";
-  const activeProvider = isAntigravity ? antigravitySummary : opencodeSummary;
+  const ovhSummary: ProviderQuotaSummary =
+    providerQuotas.find((p) => p.id === "ovh") ?? {
+      id: "ovh",
+      name: "OVHcloud",
+      description:
+        "Per-IP rate limit tracking across TesieCore proxy pool (2 requests / 60s sliding window per IP) with automatic cooldown and fast failover.",
+      strategy: "ip_pool",
+      unit_label: "Exit IP",
+      active_count: ovhIpQuotas.filter((q) => q.status !== "cooldown").length,
+      cooling_count: ovhIpQuotas.filter((q) => q.status === "cooldown").length,
+    };
+
+  const providerTabs = [
+    opencodeSummary,
+    ...(hasAntigravityAccounts ? [antigravitySummary] : []),
+    ovhSummary,
+  ];
+  const activeProvider = isAntigravity
+    ? antigravitySummary
+    : isOvh
+      ? ovhSummary
+      : opencodeSummary;
   const activeCatalogProvider = providers.find((p) => p.id === activeProvider.id);
   const activeProbeEnabled =
     activeCatalogProvider?.config.probe_enabled ??
@@ -649,33 +681,42 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {onUpdateProviderConfig && (
-              <ProbeSettingsBar
-                compact
-                providerId={activeProvider.id}
-                providerName={activeProvider.name}
-                probeEnabled={activeProbeEnabled}
-                probeIntervalSec={activeProbeIntervalSec}
-                onUpdateConfig={(patch) => onUpdateProviderConfig(activeProvider.id, patch)}
-                onManualProbe={
-                  isAntigravity
-                    ? agAccounts.length > 0 && onRefreshAntigravityQuotas
-                      ? () => void handleRefreshAgAllClick()
-                      : undefined
-                    : onProbeQuotasNow
-                      ? () => void onProbeQuotasNow()
-                      : () => void handleManualSync()
-                }
-                probing={isAntigravity ? refreshingAgAll : isProbingLive || syncing}
-                lastProbeAt={
-                  isAntigravity
-                    ? activeProvider.probe_status?.last_probe_at ??
-                      agAccounts[0]?.quota?.fetched_at ??
-                      null
-                    : quotaProbeStatus?.last_probe_at ?? lastQuotaSyncAt
-                }
-                nowMs={nowMs}
-              />
+            {isOvh ? (
+              <div className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
+                <span className="h-2 w-2 rounded-full bg-blue-500 shadow-xs" />
+                <span className="font-medium">2 req / 60s per IP</span>
+                <span className="text-[var(--text-muted)]">·</span>
+                <span className="text-[var(--text-muted)]">Passive tracking & failover</span>
+              </div>
+            ) : (
+              onUpdateProviderConfig && (
+                <ProbeSettingsBar
+                  compact
+                  providerId={activeProvider.id}
+                  providerName={activeProvider.name}
+                  probeEnabled={activeProbeEnabled}
+                  probeIntervalSec={activeProbeIntervalSec}
+                  onUpdateConfig={(patch) => onUpdateProviderConfig(activeProvider.id, patch)}
+                  onManualProbe={
+                    isAntigravity
+                      ? agAccounts.length > 0 && onRefreshAntigravityQuotas
+                        ? () => void handleRefreshAgAllClick()
+                        : undefined
+                      : onProbeQuotasNow
+                        ? () => void onProbeQuotasNow()
+                        : () => void handleManualSync()
+                  }
+                  probing={isAntigravity ? refreshingAgAll : isProbingLive || syncing}
+                  lastProbeAt={
+                    isAntigravity
+                      ? activeProvider.probe_status?.last_probe_at ??
+                        agAccounts[0]?.quota?.fetched_at ??
+                        null
+                      : quotaProbeStatus?.last_probe_at ?? lastQuotaSyncAt
+                  }
+                  nowMs={nowMs}
+                />
+              )
             )}
 
             <Button
@@ -709,14 +750,22 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                   size="sm"
                   disabled={verifyingAll}
                   onClick={() => void handleVerifyResetAll()}
-                  title="Tests cooling IPs against OpenCode and clears cooldown only when usage is available"
+                  title={
+                    isOvh
+                      ? "Clears cooldown on all cooling OVH exit IPs"
+                      : "Tests cooling IPs against OpenCode and clears cooldown only when usage is available"
+                  }
                 >
                   {verifyingAll ? (
                     <Loader2 className="h-4 w-4 animate-spin text-[var(--warning)]" />
                   ) : (
                     <RotateCcw className="h-4 w-4 text-[var(--warning)]" />
                   )}
-                  {verifyingAll ? "Verifying…" : `Verify queued (${realCoolingCount})`}
+                  {verifyingAll
+                    ? "Resetting…"
+                    : isOvh
+                      ? `Reset cooling (${realCoolingCount})`
+                      : `Verify queued (${realCoolingCount})`}
                 </Button>
               )
             )}
@@ -732,7 +781,9 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
               placeholder={
                 isAntigravity
                   ? "Filter account, NODE, or model…"
-                  : "Filter IP, NODE, or cooldown reason…"
+                  : isOvh
+                    ? "Filter OVH IP, NODE, or cooldown reason…"
+                    : "Filter IP, NODE, or cooldown reason…"
               }
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -771,7 +822,7 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
               <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
                 {(
                   [
-                    { id: "all", label: `All (${ipQuotas.length})` },
+                    { id: "all", label: `All (${currentProviderIpQuotas.length})` },
                     { id: "cooling", label: `Cooling (${realCoolingCount})` },
                     { id: "active", label: `Ready (${realReadyCount})` },
                   ] as Array<{ id: IpPoolFilter; label: string }>
@@ -1171,11 +1222,14 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
             const cooling = q.status === "cooldown";
             const cleanReason = formatCooldownReason(q.last_error);
             const hasCustomCap =
+              isOvh ||
               (q.max_requests_per_window && q.max_requests_per_window > 0) ||
               (q.max_tokens_per_window && q.max_tokens_per_window > 0);
             const displayIp = q.ip_key.startsWith("unprobed:")
               ? q.ip_key.replace("unprobed:", "")
-              : q.ip_key;
+              : q.ip_key.startsWith("ovh:")
+                ? q.ip_key.replace("ovh:", "")
+                : q.ip_key;
             const primaryProxy = q.proxies[0] ?? "Unassigned";
             const extraProxies = Math.max(0, q.proxies.length - 1);
             const usedReqs = q.requests_in_window || q.total_requests;
@@ -1255,14 +1309,14 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                             disabled={isVerifyingThis}
                             onClick={() => void handleVerifyResetSingle(q.ip_key)}
                             className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-amber-400 hover:bg-[var(--bg-elevated)] disabled:opacity-45"
-                            title="Verify live OpenCode availability before resetting cooldown"
+                            title={isOvh ? "Reset cooldown immediately" : "Verify live OpenCode availability before resetting cooldown"}
                           >
                             {isVerifyingThis ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
                               <RotateCcw className="h-3.5 w-3.5" />
                             )}
-                            <span>{isVerifyingThis ? "…" : "Verify"}</span>
+                            <span>{isVerifyingThis ? "…" : isOvh ? "Reset" : "Verify"}</span>
                           </button>
                         )}
                       </div>
@@ -1283,7 +1337,7 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                     <div className="space-y-1.5 pl-4 pt-0.5">
                       {q.max_requests_per_window ? (
                         <MeterBar
-                          label="Window requests"
+                          label={isOvh ? "Window (2 req / 60s)" : "Window requests"}
                           used={q.requests_in_window}
                           limit={q.max_requests_per_window}
                           tone="accent"
@@ -1352,8 +1406,8 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                           disabled={isVerifyingThis}
                           onClick={() => void handleVerifyResetSingle(q.ip_key)}
                           className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-amber-400 disabled:opacity-45"
-                          title="Verify live OpenCode availability & reset cooldown"
-                          aria-label={`Verify and reset ${displayIp}`}
+                          title={isOvh ? "Reset cooldown immediately" : "Verify live OpenCode availability & reset cooldown"}
+                          aria-label={`${isOvh ? "Reset" : "Verify and reset"} ${displayIp}`}
                         >
                           {isVerifyingThis ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1383,7 +1437,7 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                   <div className="space-y-1.5 pl-4 pt-0.5">
                     {q.max_requests_per_window ? (
                       <MeterBar
-                        label="Requests"
+                        label={isOvh ? "Window (2 req / 60s)" : "Requests"}
                         used={q.requests_in_window}
                         limit={q.max_requests_per_window}
                         tone="accent"
@@ -1415,7 +1469,7 @@ export const QuotaTrackerView = memo(function QuotaTrackerView({
                       onClick={() => void handleVerifyResetSingle(q.ip_key)}
                       className="shrink-0 font-semibold text-amber-400 underline-offset-2 hover:underline disabled:opacity-45"
                     >
-                      {isVerifyingThis ? "Checking…" : "Verify"}
+                      {isVerifyingThis ? (isOvh ? "Resetting…" : "Checking…") : isOvh ? "Reset" : "Verify"}
                     </button>
                   </div>
                 )}

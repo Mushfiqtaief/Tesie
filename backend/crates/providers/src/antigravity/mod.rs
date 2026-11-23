@@ -933,7 +933,7 @@ impl AntigravityEngine {
                             proxy_name: proxy.name.clone(),
                             method: "POST".to_string(),
                             fingerprint: "standard".to_string(),
-                            timeout_ms: 120_000,
+                            timeout_ms: 25_000,
                             upstream_authorization: Some(format!("Bearer {}", auth.access_token)),
                             headers: vec![
                                 ("Content-Type".into(), "application/json".into()),

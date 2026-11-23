@@ -72,10 +72,14 @@ impl Default for OpenCodeConfig {
             .unwrap_or_else(|_| "https://opencode.ai".to_string());
         let zen_base =
             std::env::var("OPENCODE_ZEN_BASE_URL").unwrap_or_else(|_| free_base.clone());
+        let timeout_ms = std::env::var("OPENCODE_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(180_000);
         Self {
             free_base_url: free_base,
             zen_base_url: zen_base,
-            timeout_ms: 120_000,
+            timeout_ms,
         }
     }
 }
@@ -689,6 +693,17 @@ impl OpenCodeEngine {
             .await?
             .ok_or_else(|| TesRouteError::NotFound(format!("ip quota {ip_key} not found")))?;
 
+        if ip_key.starts_with("ovh:") || existing.provider_id == "ovh" {
+            let reset_q = self.store.quotas().reset_ip_quota(ip_key, now).await?;
+            return Ok(VerifiedQuotaResetResult {
+                ip_key: ip_key.to_string(),
+                reset: true,
+                available: true,
+                message: format!("Reset OVH rate limit and cooldown for {ip_key}"),
+                quota: Some(reset_q),
+            });
+        }
+
         if existing.status != IpQuotaStatus::Cooldown {
             let reset_q = self.store.quotas().reset_ip_quota(ip_key, now).await?;
             let _ = self.store.quotas().record_probe_available(ip_key, now).await;
@@ -819,10 +834,22 @@ impl OpenCodeEngine {
             .map(|q| q.quota.ip_key)
             .collect();
 
+        let mut ovh_reset = 0;
+        if let Ok(ovh_cfg) = self.store.provider_configs().get_or_default("ovh").await {
+            if let Ok(ovh_quotas) = self.store.quotas().list_ip_quotas_for_config(&ovh_cfg).await {
+                for q in ovh_quotas {
+                    if q.quota.status == IpQuotaStatus::Cooldown {
+                        let _ = self.store.quotas().reset_ip_quota(&q.quota.ip_key, now_ms()).await;
+                        ovh_reset += 1;
+                    }
+                }
+            }
+        }
+
         if cooling_ips.is_empty() {
             return Ok(VerifiedBatchResetResult {
-                checked: 0,
-                reset: 0,
+                checked: ovh_reset,
+                reset: ovh_reset,
                 still_cooling: 0,
                 unhealthy: 0,
             });
@@ -881,6 +908,9 @@ impl OpenCodeEngine {
                 SingleProbeOutcome::Inconclusive => still_cooling += 1,
             }
         }
+
+        checked += ovh_reset;
+        reset += ovh_reset;
 
         Ok(VerifiedBatchResetResult {
             checked,
@@ -1175,6 +1205,14 @@ impl OpenCodeEngine {
                     Some("Bearer public".to_string())
                 };
 
+                let effective_timeout_ms = req
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("x-tesie-timeout-ms"))
+                    .and_then(|(_, v)| v.parse::<u64>().ok())
+                    .unwrap_or(self.config.timeout_ms)
+                    .clamp(5_000, 600_000);
+
                 let relay_resp = self
                     .mihomo
                     .relay(RelayRequest {
@@ -1182,7 +1220,7 @@ impl OpenCodeEngine {
                         proxy_name: candidate.proxy.name.clone(),
                         method: "POST".to_string(),
                         fingerprint: "opencode".to_string(),
-                        timeout_ms: self.config.timeout_ms,
+                        timeout_ms: effective_timeout_ms,
                         upstream_authorization: upstream_auth,
                         headers,
                         body: body_bytes.clone(),
@@ -2181,7 +2219,7 @@ fn is_model_unavailable(status: u16, body: &str) -> bool {
     .any(|m| lower.contains(m))
 }
 
-fn extract_dial_phase(err_txt: &str) -> String {
+pub fn extract_dial_phase(err_txt: &str) -> String {
     if let Ok(json) = serde_json::from_str::<Value>(err_txt)
         && let Some(p) = json.get("phase").and_then(Value::as_str)
         && !p.trim().is_empty()

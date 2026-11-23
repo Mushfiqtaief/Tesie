@@ -11,11 +11,11 @@ pub use catalog::{
 };
 pub use error::{extract_clean_context_message, is_context_length_error, Result, TesRouteError};
 pub use models::{
-    default_routing_strategy_for, normalize_routing_strategy, AntigravityModelQuotaEntry,
-    AntigravityPoolWindow, AntigravityQuotaSnapshot, ApiKeyRecord, BridgeEvent, BridgeStats,
-    ComboRecord, CustomProvider, GatewaySettings, IpCandidate, IpQuota, IpQuotaStatus,
-    MultimodalBridgeConfig, ProviderConfig, ProviderConnection, ProviderKind, ProxyNode,
-    UsageLogInput, UsageLogRecord, WireFormat,
+    default_routing_strategy_for, normalize_routing_strategy, AntigravityMitmConfig,
+    AntigravityModelQuotaEntry, AntigravityPoolWindow, AntigravityQuotaSnapshot, ApiKeyRecord,
+    BridgeEvent, BridgeStats, ComboRecord, CustomProvider, GatewaySettings, IpCandidate, IpQuota,
+    IpQuotaStatus, MultimodalBridgeConfig, ProviderConfig, ProviderConnection, ProviderKind,
+    ProxyNode, UsageLogInput, UsageLogRecord, WireFormat,
 };
 pub use token_saver::{
     apply_token_saver_to_request, compress_text_detailed, style_prompt_for, RequestSavingsReport,

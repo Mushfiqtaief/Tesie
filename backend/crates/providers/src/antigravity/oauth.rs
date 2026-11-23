@@ -1645,3 +1645,80 @@ pub async fn refresh_account_quota(
     }
     Ok(snapshot)
 }
+
+/// Returns the upstream `v1internal:fetchAvailableModels` payload verbatim: the IDE
+/// picker must show models Google actually serves, not synthesised ids. First enabled account wins.
+pub async fn fetch_available_models_raw(
+    store: &Store,
+    mihomo: &MihomoController,
+) -> Result<Value> {
+    let conns = store.connections().list_for_provider("antigravity").await?;
+    let mut last_err: Option<String> = None;
+
+    for conn in conns.iter().filter(|c| c.enabled) {
+        let proxy_name = pick_onboarding_proxy_name(store, mihomo, Some(&conn.id)).await;
+        let auth = match ensure_fresh_auth_for_connection(store, mihomo, conn, &proxy_name, false)
+            .await
+        {
+            Ok(a) => a,
+            Err(e) => {
+                last_err = Some(e.to_string());
+                continue;
+            }
+        };
+        let project_id = auth.project_id.as_deref().filter(|s| !s.is_empty());
+        let mut req_obj = serde_json::Map::new();
+        if let Some(pid) = project_id {
+            req_obj.insert("project".into(), Value::String(pid.to_string()));
+        }
+        let body_bytes =
+            serde_json::to_vec(&Value::Object(req_obj)).unwrap_or_else(|_| b"{}".to_vec());
+        let url = format!(
+            "{}/v1internal:fetchAvailableModels",
+            quota_base_url().trim_end_matches('/')
+        );
+
+        let resp = match mihomo
+            .relay(RelayRequest {
+                target_url: url,
+                proxy_name,
+                method: "POST".to_string(),
+                fingerprint: "standard".to_string(),
+                timeout_ms: 15_000,
+                upstream_authorization: Some(format!("Bearer {}", auth.access_token)),
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("User-Agent".into(), antigravity_hub_ua().into()),
+                    ("X-Client-Name".into(), "antigravity".into()),
+                    ("X-Client-Version".into(), ANTIGRAVITY_IDE_VERSION.into()),
+                ],
+                body: Bytes::from(body_bytes),
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(e.to_string());
+                continue;
+            }
+        };
+
+        if !resp.status().is_success() {
+            last_err = Some(format!("HTTP {}", resp.status().as_u16()));
+            continue;
+        }
+
+        match resp.json::<Value>().await {
+            Ok(v) if v.get("models").and_then(Value::as_object).is_some_and(|m| !m.is_empty()) => {
+                return Ok(v);
+            }
+            Ok(_) => last_err = Some("upstream returned no models".to_string()),
+            Err(e) => last_err = Some(format!("decode upstream models: {e}")),
+        }
+    }
+
+    Err(TesRouteError::NoCredentials(format!(
+        "Antigravity model list ({})",
+        last_err.unwrap_or_else(|| "no enabled account".into())
+    )))
+}

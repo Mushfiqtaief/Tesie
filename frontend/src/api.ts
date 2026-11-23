@@ -1,5 +1,6 @@
 import type {
   AntigravityAccountView,
+  AntigravityMitmConfig,
   AntigravityQuotaSnapshot,
   ApiKeyView,
   ApplyClaudeCliPayload,
@@ -44,10 +45,13 @@ import type {
   TokenSaverTestResponse,
   TopologyResponse,
   UpdateApiKeyPayload,
+  UpdateApplyResponse,
   UpdateBridgePayload,
+  UpdateCheckResponse,
   UpdateComboPayload,
   UpdateCustomProviderPayload,
   UpdateIpQuotaLimitsPayload,
+  UpdateMitmConfigPayload,
   UpdateProviderConfigPayload,
   UpdateProxyPayload,
   UpdateSettingsExtendedPayload,
@@ -628,6 +632,20 @@ export const api = {
     });
   },
 
+  getMitmConfig: async (): Promise<{ config: AntigravityMitmConfig }> => {
+    return requestJson<{ config: AntigravityMitmConfig }>("/api/admin/mitm/config");
+  },
+
+  updateMitmConfig: async (
+    payload: UpdateMitmConfigPayload,
+  ): Promise<{ config: AntigravityMitmConfig }> => {
+    return requestJson<{ config: AntigravityMitmConfig }>("/api/admin/mitm/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
   getAuthStatus: async (): Promise<AuthStatusResponse> => {
     return requestJson<AuthStatusResponse>("/api/admin/auth/status");
   },
@@ -741,6 +759,16 @@ export const api = {
     return requestJson<SettingsFullResponse>("/api/admin/settings", {
       method: "PUT",
       body: JSON.stringify(payload),
+    });
+  },
+
+  checkUpdate: async (): Promise<UpdateCheckResponse> => {
+    return requestJson<UpdateCheckResponse>("/api/admin/update/check");
+  },
+
+  applyUpdate: async (): Promise<UpdateApplyResponse> => {
+    return requestJson<UpdateApplyResponse>("/api/admin/update/apply", {
+      method: "POST",
     });
   },
 

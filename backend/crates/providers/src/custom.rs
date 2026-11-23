@@ -281,7 +281,8 @@ impl CustomProviderEngine {
                     proxy_name: proxy.name.clone(),
                     method: "POST".to_string(),
                     fingerprint: "standard".to_string(),
-                    timeout_ms: 120_000,
+                    // Fast failover timeout: 15s instead of 120s so dead/stalled proxy nodes fail over quickly
+                    timeout_ms: 15_000,
                     upstream_authorization: upstream_auth,
                     headers,
                     body: body_bytes.clone(),

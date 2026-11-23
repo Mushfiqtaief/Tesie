@@ -166,9 +166,18 @@ export function getModelLimits(
     } else if (slug.includes("1017") || slug.includes("deepseek-v4.1-flash-1017")) {
       context = 1048576;
       output = 262144;
+    } else if (slug.includes("minimax-m3") || slug.includes("minimax-m2.7")) {
+      context = 1048576;
+      output = 65536;
+    } else if (slug.includes("gemini-3.1-flash-lite") || slug.includes("gemini-2.5-flash-lite")) {
+      context = 1048576;
+      output = 65536;
     } else if (slug.includes("deepseek-v4.1-flash")) {
-      context = 200000;
+      context = 338000;
       output = 32000;
+    } else if (slug.includes("deepseek-v4-flash")) {
+      context = 128000;
+      output = 16384;
     } else if (slug.includes("glm-5.3") || slug.includes("mimo-v2.6") || slug.includes("mimo-v2.5")) {
       context = 200000;
       output = 32000;

@@ -46,6 +46,13 @@ pub enum TesRouteError {
     #[error("proxy relay error: {0}")]
     ProxyRelay(String),
 
+    #[error("all {attempts} upstream attempt(s) exhausted (last phase: {last_phase}): {message}")]
+    UpstreamsExhausted {
+        attempts: usize,
+        last_phase: String,
+        message: String,
+    },
+
     #[error("storage error: {0}")]
     Store(String),
 

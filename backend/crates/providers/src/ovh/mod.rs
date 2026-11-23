@@ -16,7 +16,7 @@ use tracing::warn;
 
 use crate::opencode::catalog::infer_model_capabilities;
 use crate::opencode::executor::{
-    ActiveRequestInfo, AttemptLeg, ProviderRequest, ProviderStreamResponse,
+    extract_dial_phase, ActiveRequestInfo, AttemptLeg, ProviderRequest, ProviderStreamResponse,
 };
 use crate::opencode::fingerprint::{
     apply_forced_thinking_level, apply_thinking_level, encode_opencode_body, ToolRenameMap,
@@ -128,11 +128,22 @@ impl OvhEngine {
         };
 
         let body_bytes = encode_opencode_body(&upstream_body, target_format)?;
+        tracing::debug!(
+            model = %upstream_model_id,
+            body = %String::from_utf8_lossy(&body_bytes),
+            "OVH prepared upstream request body"
+        );
 
+        let mihomo_states = self.mihomo.fetch_proxy_states().await.unwrap_or_default();
         let mut candidates = self
             .store
             .quotas()
-            .select_healthy_candidates_for_config(now, &cfg, |p| p.alive)
+            .select_healthy_candidates_for_config(now, &cfg, |p| {
+                mihomo_states
+                    .get(&p.name)
+                    .map(|s| s.alive)
+                    .unwrap_or(p.is_direct || p.alive)
+            })
             .await?;
 
         let model_label = display_name_for_model(ProviderKind::Ovh, &parsed.model_id);
@@ -143,13 +154,22 @@ impl OvhEngine {
         }
 
         if candidates.len() > 1 {
+            // Respect the 2 req/min rate limit: candidates are pre-sorted so proxies with
+            // 0 requests in the current window come before proxies with 1 request.
+            // Only rotate or shuffle within the tier sharing the lowest in-window requests.
+            let min_reqs = candidates[0].quota.requests_in_window;
+            let top_tier_len = candidates
+                .iter()
+                .take_while(|c| c.quota.requests_in_window == min_reqs)
+                .count();
+
             match normalize_routing_strategy(&cfg.routing_strategy, "round-robin").as_str() {
-                "round-robin" => {
-                    let off = self.rr_cursor.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                    candidates.rotate_left(off);
+                "round-robin" if top_tier_len > 1 => {
+                    let off = self.rr_cursor.fetch_add(1, Ordering::Relaxed) % top_tier_len;
+                    candidates[0..top_tier_len].rotate_left(off);
                 }
-                "random" => {
-                    candidates.shuffle(&mut rand::thread_rng());
+                "random" if top_tier_len > 1 => {
+                    candidates[0..top_tier_len].shuffle(&mut rand::thread_rng());
                 }
                 _ => {}
             }
@@ -158,8 +178,18 @@ impl OvhEngine {
         let wire_label = target_format.as_str().to_string();
         let mut attempt_legs: Vec<AttemptLeg> = Vec::new();
         let mut last_error: Option<String> = None;
+        const MAX_OVH_ATTEMPTS: usize = 5;
 
         for candidate in candidates {
+            if attempt_legs.len() >= MAX_OVH_ATTEMPTS {
+                warn!(
+                    model = %upstream_model_id,
+                    attempts = attempt_legs.len(),
+                    "OVH reached maximum candidate attempts ({MAX_OVH_ATTEMPTS}); failing fast to protect proxy fleet and avoid client timeout"
+                );
+                break;
+            }
+
             let attempt_start = now_ms();
             let attempt_num = attempt_legs.len() + 1;
             let ip_key = format!("ovh:{}", candidate.proxy.ip_key());
@@ -182,7 +212,8 @@ impl OvhEngine {
                     proxy_name: candidate.proxy.name.clone(),
                     method: "POST".to_string(),
                     fingerprint: "opencode".to_string(),
-                    timeout_ms: 120_000,
+                    // Fast failover timeout: 15s prompt failover on dead/stalled nodes
+                    timeout_ms: 15_000,
                     upstream_authorization: None,
                     headers,
                     body: body_bytes.clone(),
@@ -194,10 +225,15 @@ impl OvhEngine {
                 Err(err) => {
                     let msg = err.to_string();
                     let lat = (now_ms() - attempt_start).max(1);
+                    // The local relay is node-invariant: if 127.0.0.1:29090 is unreachable,
+                    // picking another proxy cannot help, so fail fast instead of walking the fleet.
+                    let is_local_relay_unreachable = (msg.contains("127.0.0.1") || msg.contains("localhost"))
+                        && (msg.contains("connection refused") || msg.contains("actively refused"));
                     warn!(
                         proxy = %candidate.proxy.name,
                         error = %msg,
-                        "OVH relay transport error; trying next candidate"
+                        is_local_relay_unreachable,
+                        "OVH relay transport error; handling candidate failure"
                     );
                     attempt_legs.push(AttemptLeg {
                         attempt: attempt_num,
@@ -209,10 +245,22 @@ impl OvhEngine {
                         model: Some(parsed.model_id.clone()),
                         wire_model: Some(upstream_model_id.clone()),
                         reasoning_level: reasoning_level.clone(),
-                        cooldown_applied: Some("relay error".into()),
+                        cooldown_applied: Some(if is_local_relay_unreachable {
+                            "relay daemon unreachable".to_string()
+                        } else {
+                            "relay error".to_string()
+                        }),
                         session_id: None,
                         detail: Some(msg.clone()),
                     });
+                    if is_local_relay_unreachable {
+                        let err_summary = format!(
+                            "TesieCore local relay daemon is unreachable (port 29090) after {} attempt(s). Ensure tesie-core is running.",
+                            attempt_legs.len()
+                        );
+                        return Err(self.fail_exhausted(req, parsed, wire_label, now, attempt_legs, err_summary)
+                            .await);
+                    }
                     last_error = Some(msg);
                     continue;
                 }
@@ -223,6 +271,7 @@ impl OvhEngine {
             // Handle 429 Too Many Requests
             if status_code == 429 {
                 let lat = (now_ms() - attempt_start).max(1);
+                let now_s = now_ms() / 1000;
                 let retry_after_sec = resp
                     .headers()
                     .get("retry-after")
@@ -233,9 +282,13 @@ impl OvhEngine {
                             .get("ratelimit-reset")
                             .and_then(|v| v.to_str().ok())
                             .and_then(|s| s.trim().parse::<i64>().ok())
+                            .map(|r| if r > now_s { r - now_s } else { r })
                     })
                     .unwrap_or(60)
-                    .max(1);
+                    .clamp(1, 60);
+
+                let err_bytes = resp.bytes().await.unwrap_or_default();
+                let err_text = String::from_utf8_lossy(&err_bytes).to_string();
 
                 let cooldown_until = now_ms() + retry_after_sec * 1000;
                 let _ = self
@@ -253,6 +306,7 @@ impl OvhEngine {
                     proxy = %candidate.proxy.name,
                     egress = ?egress_display,
                     retry_after_sec,
+                    body = %err_text,
                     "OVH rate limit (429); cooling proxy and failing over"
                 );
                 attempt_legs.push(AttemptLeg {
@@ -267,17 +321,60 @@ impl OvhEngine {
                     reasoning_level: reasoning_level.clone(),
                     cooldown_applied: Some(format!("cooldown {retry_after_sec}s")),
                     session_id: None,
-                    detail: Some("Rate limit exceeded (429)".into()),
+                    detail: Some(err_text.chars().take(256).collect()),
                 });
-                last_error = Some("Rate limit exceeded (429)".into());
+                last_error = Some(format!("Rate limit exceeded (429): {err_text}"));
                 continue;
             }
 
             // Handle other HTTP errors (4xx / 5xx)
             if !resp.status().is_success() {
                 let lat = (now_ms() - attempt_start).max(1);
+                // A 502 lacking X-Tesie-Proxy-Used is mihomo's dial failure, not an upstream reply.
+                let is_dial_failed = status_code == 502
+                    && resp.headers().get("x-tesie-proxy-used").is_none()
+                    && resp.headers().get("x-tesroute-proxy-used").is_none();
                 let err_bytes = resp.bytes().await.unwrap_or_default();
                 let err_text = String::from_utf8_lossy(&err_bytes).to_string();
+
+                if is_dial_failed {
+                    let phase = extract_dial_phase(&err_text);
+                    let ts = now_ms();
+                    self.mihomo.mark_proxy_unhealthy(&candidate.proxy.name, ts);
+                    let _ = self
+                        .store
+                        .proxies()
+                        .sync_mihomo_delay(&candidate.proxy.name, false, None, ts)
+                        .await;
+                    let _ = self
+                        .store
+                        .proxies()
+                        .record_proxy_failure(&candidate.proxy.id, ts)
+                        .await;
+                    warn!(
+                        proxy = %candidate.proxy.name,
+                        phase = %phase,
+                        detail = %err_text,
+                        "OVH upstream dial failed; quarantining proxy and failing over"
+                    );
+                    attempt_legs.push(AttemptLeg {
+                        attempt: attempt_num,
+                        proxy: candidate.proxy.name.clone(),
+                        egress_ip: egress_display.clone(),
+                        status: status_code,
+                        latency_ms: lat,
+                        phase: format!("upstream_dial_{phase}"),
+                        model: Some(parsed.model_id.clone()),
+                        wire_model: Some(upstream_model_id.clone()),
+                        reasoning_level: reasoning_level.clone(),
+                        cooldown_applied: Some("quarantined until healthy".into()),
+                        session_id: None,
+                        detail: Some(err_text.chars().take(256).collect()),
+                    });
+                    last_error = Some(format!("upstream dial failed ({phase})"));
+                    continue;
+                }
+
                 warn!(
                     proxy = %candidate.proxy.name,
                     status = status_code,
@@ -298,7 +395,7 @@ impl OvhEngine {
                     session_id: None,
                     detail: Some(err_text.chars().take(256).collect()),
                 });
-                last_error = Some(format!("HTTP {status_code}: {err_text}"));
+                last_error = Some(format!("HTTP {status_code}: {}", summarize_upstream_error(&err_text)));
                 continue;
             }
 
@@ -309,11 +406,14 @@ impl OvhEngine {
                 .get("ratelimit-remaining")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.trim().parse::<i64>().ok());
+            let now_s = now_ms() / 1000;
             let reset_sec = resp
                 .headers()
                 .get("ratelimit-reset")
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse::<i64>().ok());
+                .and_then(|s| s.trim().parse::<i64>().ok())
+                .map(|r| if r > now_s { r - now_s } else { r })
+                .map(|r| r.clamp(1, 60));
 
             return Ok(self.wrap_success_stream(
                 Box::pin(resp.bytes_stream()),
@@ -334,11 +434,33 @@ impl OvhEngine {
 
         // All candidates failed
         let err_summary = last_error.unwrap_or_else(|| "All candidate proxies exhausted".into());
-        {
-            if let Ok(mut g) = self.last_error.lock() {
-                *g = Some(("ovh".into(), now_ms()));
-            }
+        Err(self
+            .fail_exhausted(req, parsed, wire_label, now, attempt_legs, err_summary)
+            .await)
+    }
+
+    /// Records the terminal failure and returns a synthesized exhaustion error.
+    /// The last leg's raw body must never reach the client: a per-attempt transport
+    /// payload is not a request-level verdict and misleads downstream CLIs.
+    async fn fail_exhausted(
+        &self,
+        req: ProviderRequest,
+        parsed: ParsedModel,
+        wire_label: String,
+        started_at: i64,
+        attempt_legs: Vec<AttemptLeg>,
+        err_summary: String,
+    ) -> TesRouteError {
+        let attempts = attempt_legs.len();
+        let last_phase = attempt_legs
+            .last()
+            .map(|leg| leg.phase.clone())
+            .unwrap_or_else(|| "unknown".into());
+
+        if let Ok(mut g) = self.last_error.lock() {
+            *g = Some(("ovh".into(), now_ms()));
         }
+
         let _ = self
             .store
             .usage()
@@ -354,23 +476,24 @@ impl OvhEngine {
                 cached_tokens: 0,
                 completion_tokens: 0,
                 total_tokens: 0,
-                latency_ms: (now_ms() - now).max(1),
+                latency_ms: (now_ms() - started_at).max(1),
                 ttft_ms: None,
                 tokens_per_sec: None,
                 error_kind: Some("exhausted".into()),
                 error_detail: Some(err_summary.clone()),
                 upstream_url: Some(OVH_CHAT_URL.to_string()),
-                attempt_count: attempt_legs.len() as i64,
+                attempt_count: attempts as i64,
                 attempt_trace: serde_json::to_string(&attempt_legs).ok(),
                 session_id: None,
                 wire_format: Some(wire_label),
             })
             .await;
 
-        Err(TesRouteError::ProxyRelay(format!(
-            "OVH request failed after {} attempts: {err_summary}",
-            attempt_legs.len()
-        )))
+        TesRouteError::UpstreamsExhausted {
+            attempts,
+            last_phase,
+            message: err_summary,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -536,7 +659,7 @@ impl OvhEngine {
                             cooldown_applied: if st.remaining_reqs == Some(0) {
                                 Some(format!(
                                     "exhausted 60s window (reset {}s)",
-                                    st.reset_sec.unwrap_or(60)
+                                    st.reset_sec.unwrap_or(60).clamp(1, 60)
                                 ))
                             } else {
                                 None
@@ -640,4 +763,22 @@ impl OvhEngine {
             stream: Box::pin(out_stream),
         }
     }
+}
+
+/// Reduces a raw upstream body to a client-safe summary so an attempt-level transport
+/// payload cannot leak out as the request-level error message.
+fn summarize_upstream_error(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+        && let Some(err) = val.get("error").and_then(Value::as_str)
+    {
+        return match val.get("phase").and_then(Value::as_str) {
+            Some(phase) if !phase.is_empty() => format!("{err} ({phase})"),
+            _ => err.to_string(),
+        };
+    }
+    tesie_core::extract_clean_context_message(trimmed)
+        .chars()
+        .take(200)
+        .collect()
 }

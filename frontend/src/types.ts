@@ -734,6 +734,8 @@ export interface GatewaySettings {
 }
 
 export interface SettingsSystemInfo {
+  version?: string;
+  upstream_repo?: string;
   data_dir: string;
   db_path: string;
   db_size_bytes: number;
@@ -742,6 +744,23 @@ export interface SettingsSystemInfo {
   tray_active: boolean;
   core_healthy: boolean;
   proxy_test_interval_sec: number;
+}
+
+export interface UpdateCheckResponse {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  release_name?: string | null;
+  release_notes?: string | null;
+  published_at?: string | null;
+  html_url: string;
+  upstream_repo: string;
+}
+
+export interface UpdateApplyResponse {
+  status: "success" | "warning" | "error";
+  message: string;
+  log?: string;
 }
 
 export interface SettingsSecurityInfo {
@@ -929,3 +948,16 @@ export interface UpdateBridgePayload {
   audio_model?: string | null;
   audio_prompt?: string | null;
 }
+
+export interface AntigravityMitmConfig {
+  enabled: boolean;
+  default_target_model?: string | null;
+  model_aliases: Record<string, string>;
+}
+
+export interface UpdateMitmConfigPayload {
+  enabled?: boolean;
+  default_target_model?: string | null;
+  model_aliases?: Record<string, string>;
+}
+

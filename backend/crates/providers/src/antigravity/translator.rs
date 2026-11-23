@@ -255,31 +255,277 @@ fn build_antigravity_request_id(session_id: &str, model: &str, content_count: us
     format!("agent/{conv}/{}/{traj}/{step}", now_ms())
 }
 
-fn clean_json_schema(val: &Value) -> Value {
+pub fn clean_json_schema(val: &Value) -> Value {
     match val {
         Value::Object(map) => {
-            let mut out = Map::new();
-            for (k, v) in map {
-                if matches!(
-                    k.as_str(),
-                    "$schema"
-                        | "$id"
-                        | "additionalProperties"
-                        | "exclusiveMinimum"
-                        | "exclusiveMaximum"
-                        | "propertyNames"
-                        | "patternProperties"
-                        | "strict"
-                        | "default"
-                        | "examples"
-                ) {
-                    continue;
+            let mut effective_map = map.clone();
+
+            // 1. Convert `oneOf` to `anyOf` if `anyOf` is absent
+            if let Some(one_of) = effective_map.remove("oneOf") {
+                if !effective_map.contains_key("anyOf") {
+                    effective_map.insert("anyOf".to_string(), one_of);
                 }
-                out.insert(k.clone(), clean_json_schema(v));
             }
-            if !out.contains_key("type") && out.contains_key("properties") {
-                out.insert("type".into(), Value::String("object".into()));
+
+            // 2. Flatten `allOf`: merge any object properties into this schema
+            if let Some(all_of) = effective_map.remove("allOf") {
+                if let Value::Array(all_arr) = all_of {
+                    for sub in all_arr {
+                        if let Value::Object(sub_map) = sub {
+                            for (k, v) in sub_map {
+                                if k == "properties" {
+                                    if let Value::Object(sub_props) = v {
+                                        let current_props = effective_map
+                                            .entry("properties".to_string())
+                                            .or_insert_with(|| Value::Object(Map::new()));
+                                        if let Value::Object(cp_map) = current_props {
+                                            for (pk, pv) in sub_props {
+                                                cp_map.entry(pk).or_insert(pv);
+                                            }
+                                        }
+                                    }
+                                } else if k == "required" {
+                                    if let Value::Array(sub_req) = v {
+                                        let current_req = effective_map
+                                            .entry("required".to_string())
+                                            .or_insert_with(|| Value::Array(Vec::new()));
+                                        if let Value::Array(cr_arr) = current_req {
+                                            for r in sub_req {
+                                                if !cr_arr.contains(&r) {
+                                                    cr_arr.push(r);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if !effective_map.contains_key(&k) {
+                                    effective_map.insert(k, v);
+                                }
+                            }
+                        }
+                    }
+                }
             }
+
+            // 3. Handle `const`: Gemini Schema protobuf has NO `const` field.
+            // Convert `const: X` into `enum: [X]` and infer scalar `type` if missing.
+            if let Some(const_val) = effective_map.remove("const") {
+                if !effective_map.contains_key("enum") {
+                    let str_val = match &const_val {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        other => other.to_string().trim_matches('"').to_string(),
+                    };
+                    effective_map.insert("enum".to_string(), json!([str_val]));
+                }
+                if !effective_map.contains_key("type") {
+                    let inferred_type = match &const_val {
+                        Value::String(_) => "string",
+                        Value::Number(n) => {
+                            if n.is_i64() || n.is_u64() {
+                                "integer"
+                            } else {
+                                "number"
+                            }
+                        }
+                        Value::Bool(_) => "boolean",
+                        Value::Array(_) => "array",
+                        Value::Object(_) => "object",
+                        Value::Null => "string",
+                    };
+                    effective_map.insert("type".to_string(), json!(inferred_type));
+                }
+            }
+
+            let mut out = Map::new();
+            let mut is_nullable = effective_map
+                .get("nullable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            // 4. Handle `type`: In Gemini proto, `type` is a single enum (scalar), NEVER an array/list.
+            // E.g. `type: ["string", "null"]` -> `type: "string", nullable: true`.
+            if let Some(type_val) = effective_map.remove("type") {
+                match type_val {
+                    Value::String(s) => {
+                        let lower = s.to_ascii_lowercase();
+                        if lower == "null" {
+                            is_nullable = true;
+                            out.insert("type".to_string(), json!("string"));
+                        } else {
+                            out.insert("type".to_string(), json!(lower));
+                        }
+                    }
+                    Value::Array(type_arr) => {
+                        let mut chosen_type = None;
+                        for t in type_arr {
+                            if let Some(ts) = t.as_str() {
+                                let t_lower = ts.to_ascii_lowercase();
+                                if t_lower == "null" {
+                                    is_nullable = true;
+                                } else if chosen_type.is_none() {
+                                    chosen_type = Some(t_lower);
+                                }
+                            }
+                        }
+                        let final_type = chosen_type.unwrap_or_else(|| "string".to_string());
+                        out.insert("type".to_string(), json!(final_type));
+                    }
+                    _ => {
+                        out.insert("type".to_string(), json!("string"));
+                    }
+                }
+            }
+
+            // 5. Handle `items`: In Gemini proto, `items` is a single Schema object, NEVER an array.
+            // E.g. `items: [{ "type": "string" }]` -> `items: { "type": "string" }`.
+            if let Some(items_val) = effective_map.remove("items") {
+                let cleaned_items = match items_val {
+                    Value::Array(items_arr) => {
+                        if items_arr.is_empty() {
+                            json!({ "type": "string" })
+                        } else if items_arr.len() == 1 {
+                            clean_json_schema(&items_arr[0])
+                        } else {
+                            json!({
+                                "anyOf": items_arr.iter().map(clean_json_schema).collect::<Vec<_>>()
+                            })
+                        }
+                    }
+                    Value::Object(_) => clean_json_schema(&items_val),
+                    _ => json!({ "type": "string" }),
+                };
+                out.insert("items".to_string(), cleaned_items);
+            }
+
+            // 6. Handle `properties`: object mapping property names to Schema objects
+            if let Some(props_val) = effective_map.remove("properties") {
+                if let Value::Object(props_map) = props_val {
+                    let mut cleaned_props = Map::new();
+                    for (k, v) in props_map {
+                        cleaned_props.insert(k, clean_json_schema(&v));
+                    }
+                    out.insert("properties".to_string(), Value::Object(cleaned_props));
+                }
+            }
+
+            // 7. Handle `required`: list of required property string names
+            if let Some(req_val) = effective_map.remove("required") {
+                if let Value::Array(req_arr) = req_val {
+                    let filtered_req: Vec<Value> = req_arr
+                        .into_iter()
+                        .filter(|v| v.is_string())
+                        .collect();
+                    if !filtered_req.is_empty() {
+                        out.insert("required".to_string(), Value::Array(filtered_req));
+                    }
+                }
+            }
+
+            // 8. Handle `enum`: array of strings
+            if let Some(enum_val) = effective_map.remove("enum") {
+                if let Value::Array(enum_arr) = enum_val {
+                    let str_enum: Vec<Value> = enum_arr
+                        .into_iter()
+                        .map(|v| match v {
+                            Value::String(s) => Value::String(s),
+                            other => Value::String(other.to_string().trim_matches('"').to_string()),
+                        })
+                        .collect();
+                    if !str_enum.is_empty() {
+                        out.insert("enum".to_string(), Value::Array(str_enum));
+                    }
+                }
+            }
+
+            // 9. Handle `anyOf`: array of Schema objects
+            if let Some(any_val) = effective_map.remove("anyOf") {
+                if let Value::Array(any_arr) = any_val {
+                    let mut can_collapse = true;
+                    let mut collapsed_enums = Vec::new();
+                    let mut collapsed_type = None;
+
+                    let mut cleaned_any = Vec::new();
+                    for branch in any_arr {
+                        let cleaned_branch = clean_json_schema(&branch);
+                        if let Value::Object(b_obj) = &cleaned_branch {
+                            if let Some(b_enum) = b_obj.get("enum").and_then(Value::as_array) {
+                                if b_obj.len() <= 2 {
+                                    if let Some(t) = b_obj.get("type").and_then(Value::as_str) {
+                                        if collapsed_type.is_none() {
+                                            collapsed_type = Some(t.to_string());
+                                        }
+                                    }
+                                    for e in b_enum {
+                                        if !collapsed_enums.contains(e) {
+                                            collapsed_enums.push(e.clone());
+                                        }
+                                    }
+                                } else {
+                                    can_collapse = false;
+                                }
+                            } else {
+                                can_collapse = false;
+                            }
+                        } else {
+                            can_collapse = false;
+                        }
+                        cleaned_any.push(cleaned_branch);
+                    }
+
+                    // Collapse anyOf: [{enum: [A]}, {enum: [B]}] into single enum: [A, B]
+                    if can_collapse && !collapsed_enums.is_empty() && !out.contains_key("enum") {
+                        if !out.contains_key("type") {
+                            out.insert(
+                                "type".to_string(),
+                                json!(collapsed_type.unwrap_or_else(|| "string".to_string())),
+                            );
+                        }
+                        out.insert("enum".to_string(), Value::Array(collapsed_enums));
+                    } else if !cleaned_any.is_empty() {
+                        out.insert("anyOf".to_string(), Value::Array(cleaned_any));
+                    }
+                }
+            }
+
+            // 10. Handle `description`
+            if let Some(desc_val) = effective_map.remove("description") {
+                if let Value::String(s) = desc_val {
+                    if !s.trim().is_empty() {
+                        out.insert("description".to_string(), Value::String(s));
+                    }
+                }
+            }
+
+            // 11. Handle `format`
+            if let Some(fmt_val) = effective_map.remove("format") {
+                if let Value::String(s) = fmt_val {
+                    out.insert("format".to_string(), Value::String(s));
+                }
+            }
+
+            // 12. Handle `propertyOrdering`
+            if let Some(po_val) = effective_map.remove("propertyOrdering") {
+                if let Value::Array(po_arr) = po_val {
+                    out.insert("propertyOrdering".to_string(), Value::Array(po_arr));
+                }
+            }
+
+            if is_nullable {
+                out.insert("nullable".to_string(), Value::Bool(true));
+            }
+
+            // Ensure structural integrity:
+            if out.contains_key("properties") && !out.contains_key("type") {
+                out.insert("type".to_string(), json!("object"));
+            }
+            if out.get("type").and_then(Value::as_str) == Some("array") && !out.contains_key("items") {
+                out.insert("items".to_string(), json!({ "type": "string" }));
+            }
+            if !out.contains_key("type") && !out.contains_key("anyOf") {
+                out.insert("type".to_string(), json!("string"));
+            }
+
             Value::Object(out)
         }
         Value::Array(arr) => Value::Array(arr.iter().map(clean_json_schema).collect()),
@@ -1026,5 +1272,146 @@ mod tests {
         assert_eq!(max_output_tokens_for_antigravity_wire("claude-opus-5-5-high"), 128_000);
         assert_eq!(max_output_tokens_for_antigravity_wire("gemini-4-neon-xhigh"), 262_144);
         assert_eq!(max_output_tokens_for_antigravity_wire("gemini-3.8-flash-high"), 65_536);
+    }
+
+    #[test]
+    fn cleans_gemini_tool_schema_preventing_protobuf_errors() {
+        // 1. Array type: `type: ["string", "null"]` -> `type: "string", nullable: true`
+        let input_type_arr = json!({
+            "type": ["string", "null"],
+            "description": "optional string param"
+        });
+        let cleaned_type_arr = clean_json_schema(&input_type_arr);
+        assert_eq!(cleaned_type_arr["type"], "string");
+        assert_eq!(cleaned_type_arr["nullable"], true);
+        assert_eq!(cleaned_type_arr["description"], "optional string param");
+
+        // 2. Array items: `items: [{ "type": "string" }]` -> `items: { "type": "string" }`
+        let input_items_arr = json!({
+            "type": "array",
+            "items": [{ "type": "string", "$schema": "http://json-schema.org/draft-07/schema#" }]
+        });
+        let cleaned_items_arr = clean_json_schema(&input_items_arr);
+        assert_eq!(cleaned_items_arr["type"], "array");
+        assert!(cleaned_items_arr["items"].is_object(), "items must be a single Schema object");
+        assert_eq!(cleaned_items_arr["items"]["type"], "string");
+        assert!(cleaned_items_arr["items"].get("$schema").is_none());
+
+        // 3. Const field: `const: "exact_val"` -> `type: "string", enum: ["exact_val"]`
+        let input_const = json!({
+            "const": "prod_mode"
+        });
+        let cleaned_const = clean_json_schema(&input_const);
+        assert_eq!(cleaned_const["type"], "string");
+        assert_eq!(cleaned_const["enum"], json!(["prod_mode"]));
+        assert!(cleaned_const.get("const").is_none(), "const must be eliminated");
+
+        // 4. anyOf containing const branches (from Pydantic/Zod Literal unions)
+        // e.g. `anyOf: [{ "const": "a" }, { "const": "b" }, { "const": "c" }]`
+        let input_any_of_consts = json!({
+            "anyOf": [
+                { "const": "draft" },
+                { "const": "published" },
+                { "const": "archived" }
+            ]
+        });
+        let cleaned_any_of = clean_json_schema(&input_any_of_consts);
+        assert_eq!(cleaned_any_of["type"], "string");
+        assert_eq!(cleaned_any_of["enum"], json!(["draft", "published", "archived"]));
+        assert!(cleaned_any_of.get("const").is_none());
+
+        // 5. Strips forbidden OpenAPI/JSON schema keys ($schema, additionalProperties, strict, default, etc.)
+        let input_complex = json!({
+            "type": "object",
+            "$schema": "draft-07",
+            "additionalProperties": false,
+            "strict": true,
+            "default": {},
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": [{ "type": ["string", "null"] }]
+                },
+                "status": {
+                    "anyOf": [{ "const": "active" }, { "const": "inactive" }]
+                }
+            },
+            "required": ["status"]
+        });
+        let cleaned_complex = clean_json_schema(&input_complex);
+        assert_eq!(cleaned_complex["type"], "object");
+        assert!(cleaned_complex.get("$schema").is_none());
+        assert!(cleaned_complex.get("additionalProperties").is_none());
+        assert!(cleaned_complex.get("strict").is_none());
+        assert!(cleaned_complex.get("default").is_none());
+
+        // Verify nested tags items
+        let tags_items = &cleaned_complex["properties"]["tags"]["items"];
+        assert!(tags_items.is_object());
+        assert_eq!(tags_items["type"], "string");
+        assert_eq!(tags_items["nullable"], true);
+
+        // Verify nested status enum
+        let status_prop = &cleaned_complex["properties"]["status"];
+        assert_eq!(status_prop["type"], "string");
+        assert_eq!(status_prop["enum"], json!(["active", "inactive"]));
+    }
+
+    #[test]
+    fn build_antigravity_envelope_sanitizes_tool_declarations() {
+        let chat_body = json!({
+            "model": "gemini-3.8-flash",
+            "messages": [
+                { "role": "user", "content": "Hello" }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "edit_file",
+                        "description": "Edits a file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "lines": {
+                                    "type": "array",
+                                    "items": [{ "type": ["string", "null"] }]
+                                },
+                                "mode": {
+                                    "anyOf": [
+                                        { "const": "replace" },
+                                        { "const": "insert" }
+                                    ]
+                                }
+                            },
+                            "required": ["lines"]
+                        }
+                    }
+                }
+            ]
+        });
+
+        let bytes = build_antigravity_envelope(&chat_body, "test-proj", "gemini-3.8-flash", "seed-123")
+            .expect("envelope build should succeed");
+        let val: Value = serde_json::from_slice(&bytes).expect("valid json envelope");
+
+        let decls = val["request"]["tools"][0]["functionDeclarations"]
+            .as_array()
+            .expect("functionDeclarations array");
+
+        let edit_tool = decls
+            .iter()
+            .find(|d| d["name"].as_str().map_or(false, |n| n.contains("edit_file")))
+            .expect("edit_file tool found");
+
+        let lines_items = &edit_tool["parameters"]["properties"]["lines"]["items"];
+        assert!(lines_items.is_object(), "items must be a single Schema object");
+        assert_eq!(lines_items["type"], "string");
+        assert_eq!(lines_items["nullable"], true);
+
+        let mode_prop = &edit_tool["parameters"]["properties"]["mode"];
+        assert_eq!(mode_prop["type"], "string");
+        assert_eq!(mode_prop["enum"], json!(["replace", "insert"]));
+        assert!(mode_prop.get("const").is_none());
     }
 }

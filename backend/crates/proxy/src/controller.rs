@@ -128,24 +128,10 @@ impl MihomoController {
         std::fs::write(&config_path, yaml)
             .map_err(|e| TesRouteError::ProxyRelay(format!("write mihomo config.yaml: {e}")))?;
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            // Clean up any stale orphaned TesieCore processes before binding
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/IM", "tesie-core.exe"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        #[cfg(unix)]
-        {
-            let _ = std::process::Command::new("pkill")
-                .args(["-9", "-x", "tesie-core"])
-                .output();
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        // Reclaim only orphans tied to this work_dir. A by-image kill also took out the
+        // production daemon, so start_managed in tests killed the live app.
+        kill_orphans_for_work_dir(&abs_work_dir);
+        std::thread::sleep(Duration::from_millis(200));
 
         let mut cmd = tokio::process::Command::new(&cfg.bin_path);
         cmd.arg("-d")
@@ -768,6 +754,41 @@ impl MihomoController {
             .map_err(|e| TesRouteError::ProxyRelay(format!("relay request failed: {e}")))?;
 
         Ok(resp)
+    }
+}
+
+/// Terminates only TesieCore processes whose `-d` working directory matches `work_dir`.
+/// Scoping by command line keeps a test-spawned controller from killing the live daemon.
+fn kill_orphans_for_work_dir(work_dir: &Path) {
+    let needle = work_dir.to_string_lossy().to_lowercase();
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = format!(
+            "Get-CimInstance Win32_Process -Filter \"Name='tesie-core.exe'\" | \
+             Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains('{needle}') }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+
+    #[cfg(unix)]
+    {
+        // Match the -d argument so only this work_dir's orphans are reaped.
+        let pattern = format!("tesie-core.*{needle}");
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-f", &pattern])
+            .output();
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = &needle;
     }
 }
 

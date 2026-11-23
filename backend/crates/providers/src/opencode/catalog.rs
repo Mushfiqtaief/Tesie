@@ -57,6 +57,19 @@ fn infer_model_limits(
     id: &str,
     live_limit: Option<ModelLimitInfo>,
 ) -> (Option<ModelLimitInfo>, Option<i64>, Option<i64>) {
+    let lower = id.to_ascii_lowercase();
+
+    // Verified hardware limit override: deepseek-v4.1-flash-free supports 338,000 context tokens.
+    // Intercept upstream api.json's inaccurate 200,000 limit.
+    if lower.contains("deepseek-v4.1-flash") && (lower.contains("free") || !lower.contains("1017")) {
+        let lim = ModelLimitInfo {
+            context: Some(338_000),
+            input: None,
+            output: Some(32_000),
+        };
+        return (Some(lim), Some(338_000), Some(32_000));
+    }
+
     if let Some(lim) = live_limit {
         let ctx = lim.context.or(lim.input);
         let out = lim.output;
@@ -91,7 +104,7 @@ fn infer_model_limits(
         (Some(1_048_576), None, Some(262_144))
     } else if lower.contains("deepseek-v4.1-flash") {
         if lower.contains("free") {
-            (Some(200_000), None, Some(32_000))
+            (Some(338_000), None, Some(32_000))
         } else {
             (Some(1_000_000), None, Some(384_000))
         }

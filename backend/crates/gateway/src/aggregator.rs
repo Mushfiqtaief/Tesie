@@ -579,10 +579,33 @@ pub fn sse_error_payload(err: &TesRouteError) -> (axum::http::StatusCode, Option
                 (
                     StatusCode::BAD_GATEWAY,
                     None,
-                    json!({ "error": { "message": msg, "type": "proxy_relay_error" } }),
+                    json!({
+                        "error": {
+                            "message": msg.chars().take(300).collect::<String>(),
+                            "type": "proxy_relay_error",
+                            "code": "proxy_relay_error",
+                        }
+                    }),
                 )
             }
         }
+        TesRouteError::UpstreamsExhausted {
+            attempts,
+            last_phase,
+            message,
+        } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            None,
+            json!({
+                "error": {
+                    "message": message,
+                    "type": "upstream_exhausted",
+                    "code": "all_upstreams_exhausted",
+                    "attempts": attempts,
+                    "last_phase": last_phase,
+                }
+            }),
+        ),
         TesRouteError::Store(msg) | TesRouteError::Internal(msg) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             None,
@@ -590,3 +613,58 @@ pub fn sse_error_payload(err: &TesRouteError) -> (axum::http::StatusCode, Option
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exhaustion_is_a_clean_503_without_raw_upstream_payload() {
+        let err = TesRouteError::UpstreamsExhausted {
+            attempts: 3,
+            last_phase: "upstream_dial_timeout".into(),
+            message: "All 3 attempts failed during upstream dial (last phase: timeout)".into(),
+        };
+
+        let (status, retry_after, body) = sse_error_payload(&err);
+        let serialized = serde_json::to_string(&body).unwrap();
+
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert!(retry_after.is_none());
+        assert_eq!(body["error"]["code"], "all_upstreams_exhausted");
+        assert_eq!(body["error"]["attempts"], 3);
+        assert_eq!(body["error"]["last_phase"], "upstream_dial_timeout");
+        for leaked in ["upstream_dial_failed", "NODE - 1"] {
+            assert!(
+                !serialized.contains(leaked),
+                "client payload must not leak raw upstream body, found {leaked}"
+            );
+        }
+    }
+
+    #[test]
+    fn context_length_errors_stay_a_deterministic_400() {
+        let err = TesRouteError::ContextLengthExceeded("too long".into());
+        let (status, _, body) = sse_error_payload(&err);
+
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "context_length_exceeded");
+    }
+
+    #[test]
+    fn transport_faults_are_never_reported_as_context_overflow() {
+        for err in [
+            TesRouteError::ProxyRelay("relay request failed: timeout".into()),
+            TesRouteError::UpstreamsExhausted {
+                attempts: 2,
+                last_phase: "timeout".into(),
+                message: "timed out".into(),
+            },
+        ] {
+            let (status, _, body) = sse_error_payload(&err);
+            assert_ne!(status, axum::http::StatusCode::BAD_REQUEST);
+            assert_ne!(body["error"]["code"], "context_length_exceeded");
+        }
+    }
+}
+

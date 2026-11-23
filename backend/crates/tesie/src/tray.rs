@@ -23,7 +23,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
 };
 
+// FindWindowW returns the first window of a class, so tests need their own class or the
+// WM_CLOSE below hits the production tray and quits the live app.
+#[cfg(not(test))]
 pub const TRAY_WINDOW_CLASS: &str = "TesieTrayWindowClass";
+#[cfg(test)]
+pub const TRAY_WINDOW_CLASS: &str = "TesieTrayWindowClassTest";
 const WM_TRAY_CALLBACK: u32 = WM_USER + 42;
 const TRAY_ICON_ID: u32 = 1;
 
@@ -492,7 +497,11 @@ mod tests {
         }
 
         assert_ne!(found_hwnd, 0, "expected TesieTrayWindowClass HWND on current desktop");
-        assert!(post_close_to_running_tray(), "expected WM_CLOSE delivery to tray window");
+        // Close only the window this test created. The production tray registers the same
+        // class, so a broadcast WM_CLOSE would quit the live app (and its daemon.stop).
+        unsafe {
+            PostMessageW(found_hwnd, WM_CLOSE, 0, 0);
+        }
         tray_thread.join().expect("tray loop should exit cleanly after WM_CLOSE");
 
         let _ = std::fs::remove_dir_all(&tmp_dir);

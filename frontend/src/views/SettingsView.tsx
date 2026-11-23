@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRightLeft,
+  ArrowUpCircle,
   Check,
   Copy,
-  Database,
   Download,
-  HardDrive,
+  ExternalLink,
+  Github,
+  Loader2,
   Lock,
   LockOpen,
   Power,
@@ -17,8 +19,13 @@ import {
   Upload,
 } from "lucide-react";
 import { api, setStoredAdminToken } from "../api";
-import { Button, Card, INPUT_CLASS, StatusPill } from "../components/UiPrimitives";
-import type { BackupImportSummary, SettingsFullResponse } from "../types";
+import { Button, INPUT_CLASS, StatusPill } from "../components/UiPrimitives";
+import type {
+  BackupImportSummary,
+  SettingsFullResponse,
+  UpdateApplyResponse,
+  UpdateCheckResponse,
+} from "../types";
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -41,6 +48,12 @@ export const SettingsView = memo(function SettingsView({
   const [copiedPath, setCopiedPath] = useState(false);
   const [togglingAutostart, setTogglingAutostart] = useState(false);
   const [togglingFailover, setTogglingFailover] = useState(false);
+
+  // Update System State
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [updateLog, setUpdateLog] = useState<string | null>(null);
 
   // Proxy health interval
   const [healthIntervalInput, setHealthIntervalInput] = useState("15");
@@ -76,9 +89,57 @@ export const SettingsView = memo(function SettingsView({
     }
   }, [onNotify]);
 
+  const handleCheckUpdate = useCallback(
+    async (silent = false) => {
+      setCheckingUpdate(true);
+      try {
+        const res = await api.checkUpdate();
+        setUpdateInfo(res);
+        if (!silent) {
+          if (res.update_available) {
+            onNotify(`New update available: v${res.latest_version}`);
+          } else {
+            onNotify(`Tesie is up to date (v${res.current_version})`);
+          }
+        }
+      } catch (err) {
+        if (!silent) {
+          onNotify(err instanceof Error ? err.message : "Failed to check for updates", true);
+        }
+      } finally {
+        setCheckingUpdate(false);
+      }
+    },
+    [onNotify],
+  );
+
   useEffect(() => {
     void loadSettings();
-  }, [loadSettings]);
+    void handleCheckUpdate(true);
+  }, [loadSettings, handleCheckUpdate]);
+
+  async function handleApplyUpdate() {
+    setApplyingUpdate(true);
+    setUpdateLog(null);
+    try {
+      const res: UpdateApplyResponse = await api.applyUpdate();
+      if (res.status === "error") {
+        onNotify(res.message || "Update encountered an error", true);
+      } else {
+        onNotify(res.message || "Update applied successfully!");
+      }
+      if (res.log) {
+        setUpdateLog(res.log);
+      }
+      await loadSettings();
+      await handleCheckUpdate(true);
+      await onReloadAll();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Failed to apply update", true);
+    } finally {
+      setApplyingUpdate(false);
+    }
+  }
 
   async function handleCopyDataDir() {
     if (!data?.system.data_dir) return;
@@ -275,13 +336,19 @@ export const SettingsView = memo(function SettingsView({
     }
   }
 
+  const upstreamUrl =
+    updateInfo?.upstream_repo || data?.system.upstream_repo || "https://github.com/Mushfiqtaief/Tesie";
+  const currentVersion =
+    updateInfo?.current_version || data?.system.version || "0.1.0";
+  const hasUpdate = Boolean(updateInfo?.update_available);
+
   if (loading && !data) {
     return (
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {[1, 2, 3, 4].map((i) => (
+      <div className="mx-auto max-w-4xl space-y-4">
+        {[1, 2, 3].map((i) => (
           <div
             key={i}
-            className="h-56 animate-pulse rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]"
+            className="h-44 animate-pulse rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]"
           />
         ))}
       </div>
@@ -289,83 +356,464 @@ export const SettingsView = memo(function SettingsView({
   }
 
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        {/* Card 1: Configuration Backup (Export & Import) */}
-        <Card
-          title="Configuration Backup"
-          subtitle="Export or restore providers, proxies, combos, custom endpoints, API keys, and settings"
-          actions={
-            <StatusPill tone="accent">
-              <Database className="h-3 w-3" />
-              JSON v1
-            </StatusPill>
-          }
-        >
-          <div className="space-y-4">
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm font-medium text-[var(--text-primary)]">
-                    Export Snapshot
-                  </div>
-                  <div className="text-xs text-[var(--text-muted)]">
-                    Downloads a portable <code className="font-mono">.json</code> backup of your
-                    Tesie setup.
-                  </div>
+    <div className="mx-auto max-w-4xl space-y-6 pb-12">
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* Section 1: Upstream & Software Updates                       */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xs">
+        <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+                Software Updates &amp; Upstream
+              </h2>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Check GitHub releases, install updates in one click, and browse the upstream repository.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {hasUpdate ? (
+                <StatusPill tone="warning" dot>
+                  Update v{updateInfo?.latest_version} Available
+                </StatusPill>
+              ) : (
+                <StatusPill tone="success" dot>
+                  Up to Date (v{currentVersion})
+                </StatusPill>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Update Available Highlight Banner */}
+        {hasUpdate && (
+          <div className="border-b border-amber-500/20 bg-amber-500/10 px-6 py-4 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1 min-w-0 flex-1">
+                <div className="flex items-center gap-2 font-medium text-amber-300">
+                  <ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-400" />
+                  <span>
+                    New release <strong>v{updateInfo?.latest_version}</strong> is ready to install!
+                  </span>
                 </div>
+                {updateInfo?.release_name && (
+                  <p className="font-semibold text-[var(--text-primary)]">
+                    {updateInfo.release_name}
+                  </p>
+                )}
+                {updateInfo?.release_notes && (
+                  <p className="line-clamp-2 text-[var(--text-secondary)] font-mono text-[11px]">
+                    {updateInfo.release_notes}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={exporting}
-                  onClick={() => void handleExportBackup()}
+                  disabled={applyingUpdate}
+                  onClick={() => void handleApplyUpdate()}
+                  className="bg-amber-600 hover:bg-amber-500 text-white shadow-xs font-medium"
                 >
-                  <Download className="h-4 w-4" />
-                  {exporting ? "Exporting…" : "Export JSON"}
+                  {applyingUpdate ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Updating…
+                    </>
+                  ) : (
+                    <>
+                      <ArrowUpCircle className="h-3.5 w-3.5" />
+                      One-Click Update
+                    </>
+                  )}
                 </Button>
+                {updateInfo?.html_url && (
+                  <a
+                    href={updateInfo.html_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+                  >
+                    Release Notes
+                    <ExternalLink className="h-3 w-3 opacity-70" />
+                  </a>
+                )}
               </div>
+            </div>
 
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)] select-none">
+            {updateLog && (
+              <div className="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2.5 font-mono text-[11px] text-[var(--text-muted)] max-h-36 overflow-y-auto whitespace-pre-wrap">
+                {updateLog}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="divide-y divide-[var(--border-subtle)]/60">
+          {/* Row 1: Upstream GitHub Repo */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)]">
+                <Github className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-[var(--text-primary)]">
+                    GitHub Repository
+                  </span>
+                  <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-mono text-[var(--text-secondary)]">
+                    Mushfiqtaief/Tesie
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                  Official upstream source code, documentation, releases, and issue tracker.
+                </p>
+              </div>
+            </div>
+            <a
+              href={upstreamUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-2 text-xs font-medium text-[var(--text-primary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              <Github className="h-4 w-4" />
+              View Upstream Repo
+              <ExternalLink className="h-3.5 w-3.5 opacity-60" />
+            </a>
+          </div>
+
+          {/* Row 2: Version Checker & Manual Update */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Version &amp; Update Checker
+              </div>
+              <div className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Current installed build is <strong className="font-mono text-[var(--text-secondary)]">v{currentVersion}</strong>.
+                {updateInfo?.published_at && (
+                  <span className="ml-1.5">
+                    Latest check: {new Date(updateInfo.published_at).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={checkingUpdate || applyingUpdate}
+                onClick={() => void handleCheckUpdate(false)}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? "animate-spin" : ""}`} />
+                {checkingUpdate ? "Checking…" : "Check for Updates"}
+              </Button>
+              {hasUpdate && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={applyingUpdate}
+                  onClick={() => void handleApplyUpdate()}
+                >
+                  <ArrowUpCircle className="h-3.5 w-3.5" />
+                  {applyingUpdate ? "Updating…" : "One-Click Update"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* Section 2: Routing, Failover & Latency Policy                */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xs">
+        <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+                Routing &amp; Failover Policy
+              </h2>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Control load balancing resilience across proxy pools and set background health intervals.
+              </p>
+            </div>
+            <StatusPill tone={data?.settings.exhaustive_failover ? "success" : "warning"} dot>
+              {data?.settings.exhaustive_failover ? "Try to the Last" : "Direct Error"}
+            </StatusPill>
+          </div>
+        </div>
+
+        <div className="divide-y divide-[var(--border-subtle)]/60">
+          {/* Row 1: Failover Mode Toggle */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div className="max-w-md">
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Quota &amp; Rate-Limit Failover Mode
+              </div>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)] leading-relaxed">
+                {data?.settings.exhaustive_failover
+                  ? "Load balances and retries across every ready proxy IP (OpenCode) and operational account (Antigravity). Client only receives an error if all units fail."
+                  : "Returns upstream quota and rate limit errors immediately on the first attempt without trying backup nodes."}
+              </p>
+            </div>
+            <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1">
+              <button
+                type="button"
+                disabled={togglingFailover}
+                onClick={() => void handleToggleFailover(true)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  data?.settings.exhaustive_failover
+                    ? "bg-[var(--accent)] text-white shadow-xs"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                Try to the last
+              </button>
+              <button
+                type="button"
+                disabled={togglingFailover}
+                onClick={() => void handleToggleFailover(false)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  !data?.settings.exhaustive_failover
+                    ? "bg-[var(--warning)] text-black font-semibold shadow-xs"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                Direct error
+              </button>
+            </div>
+          </div>
+
+          {/* Row 2: Proxy Health Interval */}
+          <form
+            onSubmit={handleSaveHealthInterval}
+            className="flex flex-wrap items-center justify-between gap-4 px-6 py-4"
+          >
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                TesieCore Health Check Cadence
+              </div>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Interval in seconds for background proxy latency verification (5–3600s).
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={5}
+                max={3600}
+                value={healthIntervalInput}
+                onChange={(e) => setHealthIntervalInput(e.target.value)}
+                className={`${INPUT_CLASS} w-24 text-right font-mono py-1.5 text-xs`}
+              />
+              <span className="text-xs text-[var(--text-muted)] font-mono">sec</span>
+              <Button type="submit" variant="secondary" size="sm" disabled={savingInterval}>
+                {savingInterval ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </form>
+
+          {/* Row 3: Automated Context-Window Compacting Info */}
+          <div className="flex items-start gap-3 px-6 py-3.5 bg-[var(--bg-elevated)]/20 text-xs text-[var(--text-secondary)]">
+            <Sparkles className="h-4 w-4 text-[var(--accent)] shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <strong className="text-[var(--text-primary)] font-medium">Automatic Context-Window Compacting:</strong> Context limit exceeded errors (<code className="font-mono text-[11px]">context_length_exceeded</code> / prompt overflow) always fast-fail directly with clean HTTP 400 so AI tools (OpenCode, Claude Code, Aider) automatically compress chat history without exhausting proxy retries.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* Section 3: System, Startup & Security                        */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xs">
+        <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+                System, Startup &amp; Security
+              </h2>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Configure Windows background startup, safe database directory, and dashboard protection.
+              </p>
+            </div>
+            <StatusPill tone={data?.system.tray_active ? "success" : "neutral"} dot>
+              {data?.system.tray_active ? "System Tray Active" : "Background Daemon"}
+            </StatusPill>
+          </div>
+        </div>
+
+        <div className="divide-y divide-[var(--border-subtle)]/60">
+          {/* Row 1: Start on Windows Boot */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Start on Windows Boot
+              </div>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Automatically launches Tesie silently in your Windows System Tray on login.
+              </p>
+            </div>
+            <Button
+              variant={data?.system.auto_start_enabled ? "primary" : "secondary"}
+              size="sm"
+              disabled={togglingAutostart}
+              onClick={() => void handleToggleAutostart()}
+            >
+              <Power className="h-3.5 w-3.5" />
+              {data?.system.auto_start_enabled ? "Enabled (ON)" : "Disabled (OFF)"}
+            </Button>
+          </div>
+
+          {/* Row 2: Safe Data Path & SQLite Storage */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div className="min-w-0 max-w-md">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-[var(--text-primary)]">
+                  Safe Data Path &amp; Database
+                </span>
+                <span className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-muted)]">
+                  DB: {formatBytes(data?.system.db_size_bytes ?? 0)}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate font-mono text-xs text-[var(--text-muted)]">
+                {data?.system.data_dir || "—"}
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => void handleCopyDataDir()}>
+              {copiedPath ? (
+                <Check className="h-3.5 w-3.5 text-[var(--success)]" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+              {copiedPath ? "Copied" : "Copy Path"}
+            </Button>
+          </div>
+
+          {/* Row 3: Dashboard Access Lock */}
+          <div className="px-6 py-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-[var(--text-primary)]">
+                    Dashboard Access Lock
+                  </span>
+                  {data?.security.protection_enabled ? (
+                    <StatusPill tone="warning" dot>
+                      <Lock className="h-3 w-3" />
+                      Password Enabled
+                    </StatusPill>
+                  ) : (
+                    <StatusPill tone="success" dot>
+                      <LockOpen className="h-3 w-3" />
+                      Open (Localhost)
+                    </StatusPill>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                  Tesie runs on <code className="font-mono">127.0.0.1</code>. Set a password only if your machine is exposed on a shared LAN.
+                </p>
+              </div>
+            </div>
+
+            {data?.security.env_admin_token_active ? (
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs text-[var(--text-secondary)]">
+                Locked via <code className="font-mono font-semibold">ADMIN_TOKEN</code> environment variable. Unset it to manage passwords from this UI.
+              </div>
+            ) : (
+              <form onSubmit={handleSavePassword} className="flex flex-wrap items-center gap-2 pt-1">
+                <input
+                  type="password"
+                  placeholder={
+                    data?.security.has_admin_password
+                      ? "Enter new password…"
+                      : "Set dashboard password (optional)"
+                  }
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  className={`${INPUT_CLASS} w-64 py-1.5 text-xs font-mono`}
+                />
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={!passwordInput.trim() || savingPassword}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {savingPassword ? "Saving…" : "Save Password"}
+                </Button>
+                {data?.security.has_admin_password && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={savingPassword}
+                    onClick={() => void handleClearPassword()}
+                  >
+                    Remove Lock
+                  </Button>
+                )}
+              </form>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* Section 4: Configuration Backup & Maintenance                */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xs">
+        <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 px-6 py-4">
+          <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+            Backup &amp; Maintenance
+          </h2>
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+            Export portable configuration snapshots, restore backups, or reset internal queues.
+          </p>
+        </div>
+
+        <div className="divide-y divide-[var(--border-subtle)]/60">
+          {/* Row 1: Export Snapshot */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Export Configuration
+              </div>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Downloads a portable JSON file containing your proxies, custom providers, combos, and keys.
+              </p>
+              <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)] select-none">
                 <input
                   type="checkbox"
                   checked={includeSecrets}
                   onChange={(e) => setIncludeSecrets(e.target.checked)}
-                  className="h-4 w-4 rounded border-[var(--border-strong)] accent-[var(--accent)]"
+                  className="h-3.5 w-3.5 rounded border-[var(--border-strong)] accent-[var(--accent)]"
                 />
-                Include API keys, custom provider keys, OAuth tokens, and proxy passwords
+                Include API keys, OAuth tokens, and proxy passwords
               </label>
             </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={exporting}
+              onClick={() => void handleExportBackup()}
+            >
+              <Download className="h-3.5 w-3.5" />
+              {exporting ? "Exporting…" : "Export JSON"}
+            </Button>
+          </div>
 
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm font-medium text-[var(--text-primary)]">
-                    Restore from Backup
-                  </div>
-                  <div className="text-xs text-[var(--text-muted)]">
-                    Select a previously exported Tesie <code className="font-mono">.json</code>{" "}
-                    file.
-                  </div>
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={importing}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload className="h-4 w-4" />
-                  {importing ? "Importing…" : "Import JSON"}
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={(e) => void handleFileSelected(e)}
-                />
+          {/* Row 2: Restore from Backup */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Restore from Backup
               </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Upload a previously saved <code className="font-mono text-[11px]">tesie-backup-*.json</code> file.
+              </p>
+              <div className="mt-2 flex items-center gap-4 text-xs text-[var(--text-secondary)]">
                 <label className="flex cursor-pointer items-center gap-1.5 select-none">
                   <input
                     type="radio"
@@ -374,7 +822,7 @@ export const SettingsView = memo(function SettingsView({
                     onChange={() => setReplaceOnImport(false)}
                     className="accent-[var(--accent)]"
                   />
-                  Merge with existing items
+                  Merge items
                 </label>
                 <label className="flex cursor-pointer items-center gap-1.5 select-none">
                   <input
@@ -384,321 +832,81 @@ export const SettingsView = memo(function SettingsView({
                     onChange={() => setReplaceOnImport(true)}
                     className="accent-[var(--accent)]"
                   />
-                  Replace current configuration
+                  Replace all
                 </label>
               </div>
-
-              {lastImportSummary && (
-                <div className="rounded-lg border border-[color-mix(in_srgb,var(--success)_35%,transparent)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
-                  Restored {lastImportSummary.proxies} proxies,{" "}
-                  {lastImportSummary.custom_providers} custom providers,{" "}
-                  {lastImportSummary.combos} combos, {lastImportSummary.connections} accounts,{" "}
-                  {lastImportSummary.api_keys} API keys.
-                </div>
-              )}
             </div>
-          </div>
-        </Card>
-
-        {/* Card 2: Background Service, System Tray & Storage */}
-        <Card
-          title="Background Daemon & Storage"
-          subtitle="Always-on Windows System Tray service, boot persistence, and SQLite database path"
-          actions={
-            <StatusPill tone={data?.system.tray_active ? "success" : "neutral"} dot>
-              {data?.system.tray_active ? "System Tray Active" : "Background Ready"}
-            </StatusPill>
-          }
-        >
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  Start on Windows Boot
-                </div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  Launches Tesie silently in your System Tray when Windows signs in.
-                </div>
-              </div>
+            <div>
               <Button
-                variant={data?.system.auto_start_enabled ? "primary" : "secondary"}
+                variant="secondary"
                 size="sm"
-                disabled={togglingAutostart}
-                onClick={() => void handleToggleAutostart()}
+                disabled={importing}
+                onClick={() => fileInputRef.current?.click()}
               >
-                <Power className="h-4 w-4" />
-                {data?.system.auto_start_enabled ? "Enabled (ON)" : "Disabled (OFF)"}
+                <Upload className="h-3.5 w-3.5" />
+                {importing ? "Restoring…" : "Import JSON"}
               </Button>
-            </div>
-
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
-                  <HardDrive className="h-3.5 w-3.5 text-[var(--accent)]" />
-                  Safe Data Path
-                </span>
-                <span className="font-mono text-xs text-[var(--text-muted)] tabular-nums">
-                  DB: {formatBytes(data?.system.db_size_bytes ?? 0)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]">
-                  {data?.system.data_dir || "—"}
-                </code>
-                <Button variant="secondary" size="sm" onClick={() => void handleCopyDataDir()}>
-                  {copiedPath ? (
-                    <Check className="h-3.5 w-3.5 text-[var(--success)]" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                  Copy
-                </Button>
-              </div>
-            </div>
-
-            <form
-              onSubmit={handleSaveHealthInterval}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4"
-            >
-              <div>
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  TesieCore Proxy Health Interval
-                </div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  Background proxy latency check cadence (5–3600 seconds).
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={5}
-                  max={3600}
-                  value={healthIntervalInput}
-                  onChange={(e) => setHealthIntervalInput(e.target.value)}
-                  className={`${INPUT_CLASS} w-24 text-right font-mono`}
-                />
-                <span className="text-xs text-[var(--text-muted)]">sec</span>
-                <Button type="submit" variant="secondary" size="sm" disabled={savingInterval}>
-                  {savingInterval ? "Saving…" : "Save"}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </Card>
-
-        {/* Card: Routing & Failover Policy */}
-        <Card
-          title="Failover & Error Dispatch Policy"
-          subtitle="Configure whether Tesie load balances and retries across all accounts/proxies or returns errors immediately"
-          actions={
-            <StatusPill tone={data?.settings.exhaustive_failover ? "success" : "warning"} dot>
-              {data?.settings.exhaustive_failover ? "Try to the last (Active)" : "Direct Error Mode"}
-            </StatusPill>
-          }
-        >
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
-              <div className="min-w-0 max-w-md">
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  Quota & Rate-Limit Failover Mode
-                </div>
-                <div className="text-xs text-[var(--text-muted)] mt-1">
-                  {data?.settings.exhaustive_failover
-                    ? "Tesie automatically load balances and retries across every ready proxy IP (OpenCode) and operational account (Antigravity). Downstream client only receives a failure if every available unit is exhausted."
-                    : "Returns the upstream rate limit or quota error immediately on the very first failed attempt without retrying remaining proxies or accounts."}
-                </div>
-              </div>
-
-              <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1">
-                <button
-                  type="button"
-                  disabled={togglingFailover}
-                  onClick={() => void handleToggleFailover(true)}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    data?.settings.exhaustive_failover
-                      ? "bg-[var(--accent)] text-white shadow-xs"
-                      : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                  }`}
-                >
-                  <ArrowRightLeft className="h-3.5 w-3.5" />
-                  Try to the last
-                </button>
-                <button
-                  type="button"
-                  disabled={togglingFailover}
-                  onClick={() => void handleToggleFailover(false)}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    !data?.settings.exhaustive_failover
-                      ? "bg-[var(--warning)] text-black font-semibold shadow-xs"
-                      : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                  }`}
-                >
-                  Show error immediately
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40 p-3.5 flex items-start gap-2.5">
-              <Sparkles className="h-4 w-4 text-[var(--accent)] shrink-0 mt-0.5" />
-              <div className="text-xs leading-relaxed text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)] font-medium">Automatic Context-Window Compacting:</strong> Deterministic context length errors (<code className="font-mono text-[11px]">context_length_exceeded</code> / prompt too long) always fast-fail directly with clean HTTP 400 JSON so AI coding CLIs (OpenCode, Claude Code, Aider) can trigger their automatic compact workflow without burning unnecessary proxy retries.
-              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => void handleFileSelected(e)}
+              />
             </div>
           </div>
-        </Card>
 
-        {/* Card 3: Dashboard Password Protection (Optional) */}
-        <Card
-          title="Dashboard Access Lock"
-          subtitle="Optional password to protect the Tesie web UI and /api/admin/* controls"
-          actions={
-            data?.security.protection_enabled ? (
-              <StatusPill tone="warning" dot>
-                <Lock className="h-3 w-3" />
-                Protected
-              </StatusPill>
-            ) : (
-              <StatusPill tone="success" dot>
-                <LockOpen className="h-3 w-3" />
-                Open (Localhost)
-              </StatusPill>
-            )
-          }
-        >
-          <div className="space-y-4">
-            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-              Tesie runs locally on <code className="font-mono">127.0.0.1</code> and works without a
-              password by default. Set a password only if this machine is shared or exposed on a LAN
-              and you want to require authentication before editing providers, proxies, or API keys.
-            </p>
+          {lastImportSummary && (
+            <div className="bg-[var(--success-soft)] px-6 py-2.5 text-xs text-[var(--success)]">
+              Restored {lastImportSummary.proxies} proxies, {lastImportSummary.custom_providers} custom providers, {lastImportSummary.combos} combos, and {lastImportSummary.api_keys} API keys.
+            </div>
+          )}
 
-            {data?.security.env_admin_token_active ? (
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5 text-xs text-[var(--text-secondary)]">
-                Locked via <code className="font-mono font-semibold">ADMIN_TOKEN</code> environment
-                variable on the running server process. Unset that variable if you prefer managing a
-                password directly here.
+          {/* Row 3: Maintenance Actions */}
+          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <div className="text-sm font-medium text-[var(--text-primary)]">
+                Maintenance &amp; Diagnostics
               </div>
-            ) : (
-              <form onSubmit={handleSavePassword} className="space-y-3">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    {data?.security.has_admin_password
-                      ? "Change Dashboard Password"
-                      : "Set Dashboard Password"}
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    <input
-                      type="password"
-                      placeholder={
-                        data?.security.has_admin_password
-                          ? "Enter new password…"
-                          : "Leave blank to keep open on localhost"
-                      }
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      className={`${INPUT_CLASS} flex-1 font-mono`}
-                    />
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="md"
-                      disabled={!passwordInput.trim() || savingPassword}
-                    >
-                      <ShieldCheck className="h-4 w-4" />
-                      {savingPassword ? "Saving…" : "Save Password"}
-                    </Button>
-                    {data?.security.has_admin_password && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        disabled={savingPassword}
-                        onClick={() => void handleClearPassword()}
-                      >
-                        Remove Lock
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </form>
-            )}
-          </div>
-        </Card>
-
-        {/* Card 4: Gateway Maintenance & Diagnostics */}
-        <Card
-          title="Maintenance & Reset"
-          subtitle="Clear active cooldown queues, historical request logs, or compression counters"
-          actions={
-            <Button variant="ghost" size="sm" onClick={() => void loadSettings()}>
-              <RefreshCw className="h-3.5 w-3.5" />
-              Refresh
-            </Button>
-          }
-        >
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
-              <div>
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  Reset All Cooldowns
-                </div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  Moves queued OpenCode IPs and cooling Antigravity accounts/models back to Ready.
-                </div>
-              </div>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Reset cooling IP queues, clear historical request logs, or reset compression statistics.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"
                 disabled={resettingCooldowns}
                 onClick={() => void handleResetCooldowns()}
+                title="Clears cooldown state for all proxy IPs and accounts"
               >
-                <RotateCcw className="h-4 w-4 text-[var(--warning)]" />
+                <RotateCcw className={`h-3.5 w-3.5 ${resettingCooldowns ? "animate-spin" : "text-[var(--warning)]"}`} />
                 {resettingCooldowns ? "Resetting…" : "Reset Cooldowns"}
               </Button>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
-              <div>
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  Clear Request Logs
-                </div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  Deletes recorded request/latency history from <code className="font-mono">tesie.db</code>.
-                </div>
-              </div>
               <Button
                 variant="secondary"
                 size="sm"
                 disabled={clearingLogs}
                 onClick={() => void handleClearLogs()}
+                title="Deletes request history records from database"
               >
-                <Trash2 className="h-4 w-4 text-[var(--danger)]" />
+                <Trash2 className="h-3.5 w-3.5 text-[var(--danger)]" />
                 {clearingLogs ? "Clearing…" : "Clear Logs"}
               </Button>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 p-4">
-              <div>
-                <div className="text-sm font-medium text-[var(--text-primary)]">
-                  Clear Token Saver Telemetry
-                </div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  Resets RTK compression &amp; style savings counters without altering settings.
-                </div>
-              </div>
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
                 disabled={clearingTokenSaver}
                 onClick={() => void handleClearTokenSaver()}
+                title="Resets token savings counters"
               >
-                <Trash2 className="h-4 w-4 text-[var(--text-muted)]" />
-                {clearingTokenSaver ? "Resetting…" : "Reset Stats"}
+                <RefreshCw className={`h-3.5 w-3.5 ${clearingTokenSaver ? "animate-spin" : ""}`} />
+                Reset Telemetry
               </Button>
             </div>
           </div>
-        </Card>
-      </div>
+        </div>
+      </section>
     </div>
   );
 });

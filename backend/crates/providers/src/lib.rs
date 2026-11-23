@@ -5,7 +5,7 @@ pub mod ovh;
 pub mod translator;
 
 pub use antigravity::{
-    oauth::{OAuthSessionPollStatus, StartedOAuthFlow},
+    oauth::{fetch_available_models_raw, OAuthSessionPollStatus, StartedOAuthFlow},
     partition::{AccountProxyPartition, AssignedProxyBrief},
     AntigravityAccountView, AntigravityEngine,
 };

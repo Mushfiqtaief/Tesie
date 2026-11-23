@@ -462,3 +462,20 @@ pub struct BridgeStats {
     pub last_event: Option<BridgeEvent>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityMitmConfig {
+    pub enabled: bool,
+    pub default_target_model: Option<String>,
+    pub model_aliases: std::collections::HashMap<String, String>,
+}
+
+impl Default for AntigravityMitmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_target_model: None,
+            model_aliases: std::collections::HashMap::new(),
+        }
+    }
+}
+

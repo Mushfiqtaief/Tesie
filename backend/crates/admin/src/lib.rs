@@ -172,6 +172,14 @@ pub fn admin_router(state: AdminState) -> Router {
         )
         .route("/bridge/stats", get(get_bridge_stats))
         .route("/bridge/simulate-event", post(simulate_bridge_event))
+        .route(
+            "/mitm/config",
+            get(get_mitm_config)
+                .put(update_mitm_config)
+                .patch(update_mitm_config),
+        )
+        .route("/update/check", get(check_update))
+        .route("/update/apply", post(apply_update))
         .layer(middleware::from_fn_with_state(state.clone(), require_admin_auth))
         .with_state(state)
 }
@@ -947,24 +955,48 @@ async fn probe_single_proxy(
 async fn list_ip_quotas(
     State(state): State<AdminState>,
 ) -> std::result::Result<Json<Value>, Response> {
+    let now = now_ms();
     let oc_cfg = state
         .store
         .provider_configs()
         .get_or_default("opencode")
         .await
         .map_err(err_resp)?;
-    let quotas = state
+    let ovh_cfg = state
         .store
-        .quotas()
-        .list_ip_quotas_for_config(&oc_cfg)
+        .provider_configs()
+        .get_or_default("ovh")
         .await
-        .map_err(err_resp)?;
+        .unwrap_or_else(|_| tesie_core::ProviderConfig {
+            provider_id: "ovh".into(),
+            enabled: true,
+            proxy_mode: "all".into(),
+            selected_proxy_ids: Vec::new(),
+            window_duration_ms: 60_000,
+            max_requests_per_window: Some(2),
+            max_tokens_per_window: None,
+            session_ttl_ms: 14_400_000,
+            thinking_level: "auto".into(),
+            probe_enabled: false,
+            probe_interval_sec: 60,
+            routing_strategy: "round-robin".into(),
+            updated_at: now,
+        });
+
+    let (oc_quotas_res, ovh_quotas_res) = tokio::join!(
+        async { state.store.quotas().list_ip_quotas_for_config(&oc_cfg).await },
+        async { state.store.quotas().list_ip_quotas_for_config(&ovh_cfg).await },
+    );
+    let mut all_quotas = oc_quotas_res.map_err(err_resp)?;
+    if let Ok(ovh_quotas) = ovh_quotas_res {
+        all_quotas.extend(ovh_quotas);
+    }
     let probe_status = state.engine.quota_probe_status().await;
     Ok(Json(json!({
-        "ip_quotas": quotas,
+        "ip_quotas": all_quotas,
         "proxy_mode": oc_cfg.proxy_mode,
         "selected_proxy_count": oc_cfg.selected_proxy_ids.len(),
-        "refreshed_at": now_ms(),
+        "refreshed_at": now,
         "refresh_interval_sec": probe_status.interval_sec,
         "probe_status": probe_status
     })))
@@ -2856,6 +2888,8 @@ async fn build_settings_payload(state: &AdminState) -> std::result::Result<Value
     Ok(json!({
         "settings": settings,
         "system": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "upstream_repo": "https://github.com/Mushfiqtaief/Tesie",
             "data_dir": data_dir.to_string_lossy(),
             "db_path": db_path.to_string_lossy(),
             "db_size_bytes": db_size_bytes,
@@ -3271,6 +3305,225 @@ async fn simulate_bridge_event(
     };
     state.engine.record_bridge_event(event.clone());
     Ok(Json(json!({ "ok": true, "event": event })))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateMitmConfigInput {
+    pub enabled: Option<bool>,
+    pub default_target_model: Option<Option<String>>,
+    pub model_aliases: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn get_mitm_config(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let config = state.store.mitm().get_config().await.map_err(err_resp)?;
+    Ok(Json(json!({ "config": config })))
+}
+
+async fn update_mitm_config(
+    State(state): State<AdminState>,
+    Json(input): Json<UpdateMitmConfigInput>,
+) -> std::result::Result<Json<Value>, Response> {
+    let mut cfg = state.store.mitm().get_config().await.map_err(err_resp)?;
+    if let Some(v) = input.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = input.default_target_model {
+        cfg.default_target_model = v;
+    }
+    if let Some(aliases) = input.model_aliases {
+        cfg.model_aliases = aliases;
+    }
+    state.store.mitm().save_config(&cfg).await.map_err(err_resp)?;
+    Ok(Json(json!({ "config": cfg })))
+}
+
+fn parse_version_numbers(v: &str) -> Vec<u64> {
+    v.trim_start_matches(|c: char| c == 'v' || c == 'V')
+        .split(|c: char| c == '.' || c == '-' || c == '+')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect()
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let l_parts = parse_version_numbers(latest);
+    let c_parts = parse_version_numbers(current);
+    for (l, c) in l_parts.iter().zip(c_parts.iter()) {
+        if l > c {
+            return true;
+        } else if l < c {
+            return false;
+        }
+    }
+    l_parts.len() > c_parts.len()
+}
+
+async fn check_update(
+    State(_state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let client = reqwest::Client::builder()
+        .user_agent(format!("Tesie-Gateway/{}", current_version))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| err_resp(TesRouteError::Internal(e.to_string())))?;
+
+    let upstream_repo = "https://github.com/Mushfiqtaief/Tesie";
+    let mut latest_version = current_version.to_string();
+    let mut release_name: Option<String> = None;
+    let mut release_notes: Option<String> = None;
+    let mut published_at: Option<String> = None;
+    let mut html_url = format!("{}/releases", upstream_repo);
+    let mut update_available = false;
+
+    // 1. Check latest GitHub release
+    let releases_url = "https://api.github.com/repos/Mushfiqtaief/Tesie/releases/latest";
+    if let Ok(resp) = client.get(releases_url).send().await {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<Value>().await {
+                if let Some(tag) = json.get("tag_name").and_then(|v| v.as_str()) {
+                    let clean_tag = tag.trim_start_matches(|c: char| c == 'v' || c == 'V');
+                    if is_newer_version(clean_tag, current_version) {
+                        latest_version = clean_tag.to_string();
+                        update_available = true;
+                        release_name = json.get("name").and_then(|v| v.as_str()).map(String::from);
+                        release_notes = json.get("body").and_then(|v| v.as_str()).map(String::from);
+                        published_at = json.get("published_at").and_then(|v| v.as_str()).map(String::from);
+                        if let Some(url) = json.get("html_url").and_then(|v| v.as_str()) {
+                            html_url = url.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to GitHub Tags if no formal release is marked latest or not newer
+    if !update_available {
+        let tags_url = "https://api.github.com/repos/Mushfiqtaief/Tesie/tags";
+        if let Ok(resp) = client.get(tags_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(tags) = resp.json::<Vec<Value>>().await {
+                    for tag_obj in tags {
+                        if let Some(name) = tag_obj.get("name").and_then(|v| v.as_str()) {
+                            let clean_tag = name.trim_start_matches(|c: char| c == 'v' || c == 'V');
+                            if is_newer_version(clean_tag, current_version) {
+                                latest_version = clean_tag.to_string();
+                                update_available = true;
+                                html_url = format!("{}/releases/tag/{}", upstream_repo, name);
+                                if release_name.is_none() {
+                                    release_name = Some(format!("Version {}", clean_tag));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "update_available": update_available,
+        "release_name": release_name,
+        "release_notes": release_notes,
+        "published_at": published_at,
+        "html_url": html_url,
+        "upstream_repo": upstream_repo,
+    })))
+}
+
+async fn apply_update(
+    State(state): State<AdminState>,
+) -> std::result::Result<Json<Value>, Response> {
+    let mut log_output = Vec::new();
+
+    // 1. Attempt Git Pull
+    let git_check = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output();
+
+    let mut git_success = false;
+    if let Ok(out) = git_check {
+        if out.status.success() {
+            log_output.push("Git working copy detected. Pulling latest commits from origin/main...".to_string());
+            let pull_out = std::process::Command::new("git")
+                .args(["pull", "origin", "main"])
+                .output();
+
+            match pull_out {
+                Ok(p) => {
+                    let stdout = String::from_utf8_lossy(&p.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&p.stderr).trim().to_string();
+                    if !stdout.is_empty() {
+                        log_output.push(format!("git stdout:\n{}", stdout));
+                    }
+                    if !stderr.is_empty() {
+                        log_output.push(format!("git stderr:\n{}", stderr));
+                    }
+                    git_success = p.status.success();
+                }
+                Err(e) => {
+                    log_output.push(format!("Failed to execute git pull: {}", e));
+                }
+            }
+        }
+    }
+
+    // 2. Rebuild & Deploy Frontend if frontend workspace exists
+    if std::path::Path::new("frontend/package.json").exists() {
+        log_output.push("Building frontend distribution...".to_string());
+        let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+        let build_res = std::process::Command::new(npm_cmd)
+            .args(["--prefix", "frontend", "run", "build"])
+            .output();
+
+        if let Ok(b) = build_res {
+            if b.status.success() {
+                log_output.push("Frontend build succeeded. Deploying assets to web root...".to_string());
+                let data_dir = data_dir_from_state(&state);
+                let www_dir = data_dir.join("www");
+                let _ = std::fs::create_dir_all(&www_dir);
+
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("powershell")
+                        .args([
+                            "-NoProfile",
+                            "-Command",
+                            "Copy-Item -Path 'frontend\\dist\\*' -Destination (Join-Path $env:LOCALAPPDATA 'Tesie\\www') -Recurse -Force",
+                        ])
+                        .output();
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = std::process::Command::new("cp")
+                        .args(["-r", "frontend/dist/*", &www_dir.to_string_lossy()])
+                        .output();
+                }
+                log_output.push("Assets refreshed in web server directory.".to_string());
+            } else {
+                let err = String::from_utf8_lossy(&b.stderr);
+                log_output.push(format!("Frontend build warning:\n{}", err));
+            }
+        }
+    }
+
+    let status = if git_success || !log_output.is_empty() { "success" } else { "warning" };
+    let message = if git_success {
+        "Update successfully pulled and applied. Web UI updated."
+    } else {
+        "Update process completed with logs."
+    };
+
+    Ok(Json(json!({
+        "status": status,
+        "message": message,
+        "log": log_output.join("\n")
+    })))
 }
 
 fn err_resp(err: TesRouteError) -> Response {
