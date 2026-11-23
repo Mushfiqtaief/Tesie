@@ -52,6 +52,7 @@ pub fn build_app_router(
     catalog: Arc<ModelCatalogCache>,
     opts: AppOptions,
 ) -> Router {
+    let memory_cache = tesie_core::MemoryCache::default();
     let gw_state = GatewayState {
         store: store.clone(),
         engine: engine.clone(),
@@ -59,7 +60,7 @@ pub fn build_app_router(
         catalog: catalog.clone(),
         require_api_key: opts.require_api_key,
         fetch_live_models: opts.fetch_live_models,
-        memory_cache: tesie_gateway::MemoryCache::default(),
+        memory_cache: memory_cache.clone(),
     };
     let adm_state = AdminState {
         store: store.clone(),
@@ -71,6 +72,7 @@ pub fn build_app_router(
         admin_token: opts.admin_token,
         require_admin_auth: opts.require_admin_auth,
         auth_limiter: Arc::new(AuthAttemptLimiter::default()),
+        memory_cache: Some(memory_cache),
     };
 
     let icon_store = store;

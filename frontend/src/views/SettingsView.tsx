@@ -777,6 +777,11 @@ export const SettingsView = memo(function SettingsView({
                   <div className="text-[11px] text-[var(--text-muted)]">Cached Entries</div>
                   <div className="text-sm font-semibold font-mono text-[var(--text-primary)]">
                     {cacheStats.total_entries.toLocaleString()}
+                    {cacheStats.memory_entries > 0 && (
+                      <span className="text-[10px] text-[var(--text-muted)] font-normal ml-1">
+                        ({cacheStats.memory_entries} RAM)
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div>

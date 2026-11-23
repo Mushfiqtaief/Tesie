@@ -48,6 +48,8 @@ pub struct AdminState {
     pub require_admin_auth: bool,
     /// Failed-unlock tracking, keyed by client IP.
     pub auth_limiter: Arc<AuthAttemptLimiter>,
+    /// Optional shared L1 in-memory cache for live entry reporting and atomic purge.
+    pub memory_cache: Option<tesie_core::MemoryCache>,
 }
 
 pub fn admin_router(state: AdminState) -> Router {
@@ -3111,18 +3113,24 @@ async fn prune_logs_maintenance(
 async fn get_cache_stats(
     State(state): State<AdminState>,
 ) -> std::result::Result<Json<Value>, Response> {
-    let stats = state
+    let mut stats = state
         .store
         .response_cache()
         .get_stats()
         .await
         .map_err(err_resp)?;
+    if let Some(ref mem) = state.memory_cache {
+        stats.memory_entries = mem.count();
+    }
     Ok(Json(json!(stats)))
 }
 
 async fn purge_cache(
     State(state): State<AdminState>,
 ) -> std::result::Result<Json<Value>, Response> {
+    if let Some(ref mem) = state.memory_cache {
+        mem.clear();
+    }
     let purged = state
         .store
         .response_cache()
